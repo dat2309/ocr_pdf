@@ -132,6 +132,14 @@ Lệnh trên sẽ:
 npm start
 ```
 
+### 6. Triển khai lên GitHub Pages (Miễn phí)
+Dự án đã tích hợp sẵn GitHub Actions workflow tự động deploy lên GitHub Pages khi push code lên nhánh `main`:
+1. Vào repository trên GitHub > chọn tab **Settings**.
+2. Chọn mục **Pages** ở thanh bên trái.
+3. Tại phần **Build and deployment** > **Source**, chọn **GitHub Actions**.
+4. Mỗi khi bạn `git push` lên nhánh `main`, hệ thống sẽ tự động build và xuất bản trang web tại địa chỉ:
+   `https://<username>.github.io/<ten-repo>/`
+
 ---
 
 ## 🛠️ Công Nghệ Sử Dụng
