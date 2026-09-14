@@ -1,0 +1,6 @@
+{
+  "name": "Trích Xuất Kết Quả Xét Nghiệm Sang Excel",
+  "description": "Nhập ảnh hoặc file PDF kết quả xét nghiệm y tế, tự động nhận diện và trích xuất chỉ số sang bảng đối chiếu trực quan và xuất file Excel chính xác.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
