@@ -7,6 +7,11 @@ import {
   RefreshCw,
   FileText,
   ImageIcon,
+  FileCode,
+  Copy,
+  Check,
+  Info,
+  Eye,
 } from 'lucide-react';
 import { LabReport } from '../types';
 
@@ -24,9 +29,21 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'preview' | 'info'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'raw' | 'info'>('preview');
+  const [copiedRaw, setCopiedRaw] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleCopyRaw = async () => {
+    if (!report?.rawText) return;
+    try {
+      await navigator.clipboard.writeText(report.rawText);
+      setCopiedRaw(true);
+      setTimeout(() => setCopiedRaw(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy raw text:', err);
+    }
+  };
 
   const handleRotateCw = () => setRotation((prev) => (prev + 90) % 360);
   const handleRotateCcw = () => setRotation((prev) => (prev - 90 + 360) % 360);
@@ -96,26 +113,50 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </span>
         </div>
 
-        <div className="flex items-center space-x-1.5">
+        <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-[11px]">
           <button
             type="button"
-            onClick={() => setActiveTab(activeTab === 'preview' ? 'info' : 'preview')}
-            className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+            onClick={() => setActiveTab('preview')}
+            className={`px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${
+              activeTab === 'preview' ? 'bg-teal-600 text-white' : 'hover:bg-slate-800 text-slate-400'
+            }`}
+          >
+            <Eye className="w-3 h-3" />
+            <span>Tài liệu gốc</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('raw')}
+            className={`px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${
+              activeTab === 'raw' ? 'bg-teal-600 text-white' : 'hover:bg-slate-800 text-slate-400'
+            }`}
+            title="Xem toàn bộ văn bản OCR đọc được nguyên bản từ tập tin"
+          >
+            <FileCode className="w-3 h-3" />
+            <span>Dữ liệu Raw</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('info')}
+            className={`px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${
               activeTab === 'info' ? 'bg-teal-600 text-white' : 'hover:bg-slate-800 text-slate-400'
             }`}
           >
-            Thông tin phiếu
+            <Info className="w-3 h-3" />
+            <span>Thông tin</span>
           </button>
         </div>
       </div>
 
       {/* Main Canvas Area */}
       <div
-        className="relative flex-1 overflow-hidden cursor-grab active:cursor-grabbing flex items-center justify-center bg-slate-950/60"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        className={`relative flex-1 overflow-hidden flex items-center justify-center bg-slate-950/60 ${
+          activeTab === 'preview' ? 'cursor-grab active:cursor-grabbing' : ''
+        }`}
+        onMouseDown={activeTab === 'preview' ? handleMouseDown : undefined}
+        onMouseMove={activeTab === 'preview' ? handleMouseMove : undefined}
+        onMouseUp={activeTab === 'preview' ? handleMouseUp : undefined}
+        onMouseLeave={activeTab === 'preview' ? handleMouseUp : undefined}
       >
         {activeTab === 'preview' ? (
           <div
@@ -138,6 +179,53 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 draggable={false}
               />
             )}
+          </div>
+        ) : activeTab === 'raw' ? (
+          /* Raw OCR Text View */
+          <div className="w-full h-full flex flex-col bg-slate-950 p-4 text-slate-200">
+            <div className="flex flex-wrap items-center justify-between pb-3 mb-2 border-b border-slate-800 gap-2">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-teal-400" />
+                <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">
+                  Dữ liệu Text thô (Raw OCR)
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-teal-300 font-mono">
+                  {(report.rawText || '').split('\n').filter(Boolean).length} dòng · {(report.rawText || '').length} ký tự
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyRaw}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors border border-slate-700 hover:border-slate-600 shadow-2xs"
+                title="Sao chép toàn bộ văn bản OCR vào Clipboard"
+              >
+                {copiedRaw ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400 font-semibold">Đã chép vào Clipboard</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Sao chép Text Raw</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto rounded-lg bg-slate-900 border border-slate-800/90 p-3.5 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap select-text shadow-inner">
+              {report.rawText ? (
+                report.rawText
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center py-8">
+                  <FileCode className="w-8 h-8 text-slate-600 mb-2" />
+                  <p className="text-xs">Chưa có chuỗi văn bản OCR thô cho tài liệu này.</p>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    Hãy nhấn "Đọc lại tập tin" để quét lại dữ liệu ký tự.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           /* Metadata view */
@@ -195,8 +283,9 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         )}
       </div>
 
-      {/* Floating Toolbar Controls at Bottom (Matching design reference) */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 text-white rounded-full px-3 py-1.5 shadow-xl flex items-center space-x-2 z-20">
+      {/* Floating Toolbar Controls at Bottom (Only in preview mode) */}
+      {activeTab === 'preview' && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 text-white rounded-full px-3 py-1.5 shadow-xl flex items-center space-x-2 z-20">
         <button
           type="button"
           onClick={handleRotateCcw}
@@ -231,6 +320,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         </button>
       </div>
+      )}
 
       {/* Bottom Left thumbnail indicator like in user's image */}
       <div className="absolute bottom-4 left-4 flex items-center space-x-1.5 z-20">

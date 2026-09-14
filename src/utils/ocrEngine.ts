@@ -206,6 +206,7 @@ export async function processMedicalFile(
     unmappedCount: parsedPartial.unmappedCount || 0,
     avgConfidence: parsedPartial.avgConfidence || 90,
     rawSummary: parsedPartial.rawSummary || `Đọc được ${parsedPartial.tests?.length || 0} chỉ số`,
+    rawText: extractedText || parsedPartial.rawText || '',
     createdAt: new Date().toISOString(),
   };
 

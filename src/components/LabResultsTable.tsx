@@ -13,6 +13,8 @@ import {
   ExternalLink,
   Edit2,
   CheckCircle2,
+  FileCode,
+  X,
 } from 'lucide-react';
 import { LabReport, LabTestItem, LabTestStatus } from '../types';
 import { LAB_CATALOG, COMMON_UNITS } from '../data/labCatalog';
@@ -41,6 +43,8 @@ export const LabResultsTable: React.FC<LabResultsTableProps> = ({
   const [copied, setCopied] = useState(false);
   const [isEditingPatient, setIsEditingPatient] = useState(false);
   const [patientForm, setPatientForm] = useState(report.patient);
+  const [showRawModal, setShowRawModal] = useState(false);
+  const [copiedRawInTable, setCopiedRawInTable] = useState(false);
 
   // Auto calculate status based on value and reference range
   const recalculateStatus = (
@@ -332,15 +336,27 @@ export const LabResultsTable: React.FC<LabResultsTableProps> = ({
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={onReAnalyze}
-            disabled={isReanalyzing}
-            className="text-xs text-teal-700 hover:text-teal-800 font-semibold inline-flex items-center gap-1 transition-colors disabled:opacity-50"
-          >
-            <RotateCw className={`w-3.5 h-3.5 ${isReanalyzing ? 'animate-spin' : ''}`} />
-            <span>Đọc lại tập tin</span>
-          </button>
+          <div className="flex items-center space-x-3">
+            <button
+              type="button"
+              onClick={() => setShowRawModal(true)}
+              className="text-xs text-teal-700 hover:text-teal-800 font-semibold inline-flex items-center gap-1 transition-colors"
+              title="Xem văn bản thô đọc được từ OCR"
+            >
+              <FileCode className="w-3.5 h-3.5" />
+              <span>Xem Dữ liệu Raw</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onReAnalyze}
+              disabled={isReanalyzing}
+              className="text-xs text-slate-600 hover:text-slate-800 font-medium inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${isReanalyzing ? 'animate-spin' : ''}`} />
+              <span>Đọc lại tập tin</span>
+            </button>
+          </div>
         </div>
 
         {/* Filters and search bar */}
@@ -655,6 +671,84 @@ export const LabResultsTable: React.FC<LabResultsTableProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Raw Data Modal Popup */}
+      {showRawModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center">
+                  <FileCode className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Dữ liệu OCR thô (Raw Text)</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Văn bản nhận diện trực tiếp từ phiếu xét nghiệm: {report.fileName}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRawModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 flex-1 overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between mb-2 text-xs text-slate-500">
+                <span>
+                  Tổng cộng: <strong className="text-slate-800 font-mono">{(report.rawText || '').split('\n').filter(Boolean).length} dòng</strong> ({(report.rawText || '').length} ký tự)
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">Định dạng: Plain Text UTF-8</span>
+              </div>
+
+              <div className="flex-1 overflow-auto bg-slate-950 text-slate-200 p-4 rounded-xl font-mono text-xs leading-relaxed whitespace-pre-wrap select-text border border-slate-800 shadow-inner">
+                {report.rawText || 'Chưa có dữ liệu văn bản thô cho tài liệu này.'}
+              </div>
+            </div>
+
+            <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!report.rawText) return;
+                  try {
+                    await navigator.clipboard.writeText(report.rawText);
+                    setCopiedRawInTable(true);
+                    setTimeout(() => setCopiedRawInTable(false), 2000);
+                  } catch (err) {
+                    console.error('Failed to copy raw text:', err);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors"
+              >
+                {copiedRawInTable ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-600 font-semibold">Đã chép vào Clipboard</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Sao chép toàn bộ Text</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowRawModal(false)}
+                className="px-4 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-200/60 rounded-lg transition-colors"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

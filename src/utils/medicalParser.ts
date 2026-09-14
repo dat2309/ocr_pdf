@@ -425,6 +425,7 @@ export function parseMedicalReportFromText(
     unmappedCount,
     avgConfidence,
     rawSummary: `Đọc được ${tests.length} chỉ số · ${unmappedCount} chỉ tiêu chưa khớp danh mục · ${abnormalCount} chỉ số bất thường · Độ tin cậy trung bình ${avgConfidence}%`,
+    rawText,
     createdAt: new Date().toISOString(),
   };
 }

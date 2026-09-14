@@ -287,6 +287,36 @@ export const SAMPLE_REPORTS: LabReport[] = [
     unmappedCount: 2,
     avgConfidence: 87,
     rawSummary: 'Đọc được 12 chỉ số · 2 chỉ tiêu chưa khớp danh mục · 6 chỉ số bất thường · Độ tin cậy trung bình 87%',
+    rawText: `BỆNH VIỆN ĐA KHOA QUỐC TẾ - KHOA XÉT NGHIỆM
+Địa chỉ: 108 Lê Duẩn, Hà Nội • Hotline: 1900 1234 • Website: medilab.vn
+
+PHIẾU KẾT QUẢ XÉT NGHIỆM
+Loại xét nghiệm: Huyết học 12 thông số (CBC)
+
+Họ tên: UYÊN LÊ
+Giới tính: Nữ  (1999)    Mã BN: BN-2026-9871
+Ngày lấy mẫu: 08/09/2026 07:30
+Ngày trả kết quả: 08/09/2026 09:15
+Bác sĩ chỉ định: BS.CKI Trần Văn Đức
+Chẩn đoán: Kiểm tra sức khỏe định kỳ / Nghi ngờ thiếu máu nhẹ
+
+STT   TÊN CHỈ SỐ / KÝ HIỆU   KẾT QUẢ   ĐƠN VỊ     KHOẢNG THAM CHIẾU   ĐÁNH GIÁ
+1     WBC (Bạch cầu)         12.4      10^9/L     4.0 - 10.0          H
+2     RBC (Hồng cầu)         4.35      10^12/L    4.20 - 5.40
+3     HGB (Huyết sắc tố)     11.2      g/dL       12.0 - 15.5         L
+4     HCT (Hematocrit)       34.5      %          37.0 - 47.0         L
+5     MCV (Thể tích TB HC)   79.3      fL         80.0 - 100.0        L
+6     MCH (Hb TB hồng cầu)   25.7      pg         27.0 - 33.0         L
+7     MCHC (Nồng độ Hb)      32.4      g/dL       32.0 - 36.0
+8     PLT (Tiểu cầu)         178       10^9/L     150 - 400
+9     NEU% (BC Trung tính)   76.2      %          45.0 - 75.0         H
+10    LYM% (BC Lympho)       16.8      %          20.0 - 40.0         L
+11    RDW-CV (Phân bố HC)    15.8      %          11.5 - 14.5         H
+12    MPV (Thể tích TC)      10.2      fL         6.5 - 12.0
+
+KỸ THUẬT VIÊN XÉT NGHIỆM: (Đã ký số điện tử)
+TRƯỞNG KHOA XÉT NGHIỆM: BS.CKII Nguyễn Thu Trang
+Mã tra cứu trực tuyến: 9871-XN`,
     createdAt: '2026-09-08 09:15',
   },
   {
@@ -502,6 +532,31 @@ export const SAMPLE_REPORTS: LabReport[] = [
     unmappedCount: 0,
     avgConfidence: 94,
     rawSummary: 'Đọc được 11 chỉ số · 0 chỉ tiêu chưa khớp danh mục · 7 chỉ số bất thường · Độ tin cậy trung bình 94%',
+    rawText: `TRUNG TÂM XÉT NGHIỆM Y KHOA KỸ THUẬT CAO
+Địa chỉ: 45 Trường Chinh, Đống Đa, Hà Nội • Điện thoại: (024) 3869 5555
+
+PHIẾU KẾT QUẢ XÉT NGHIỆM SINH HÓA MÁU
+Họ và tên: NGUYỄN VĂN AN
+Giới tính: Nam  (1978 - 48 tuổi)    Mã BN: BN-2026-1044
+Ngày lấy mẫu: 12/09/2026 08:00
+Ngày trả kết quả: 12/09/2026 10:45
+Bác sĩ chỉ định: TS.BS Lê Hoàng Long
+Chẩn đoán: Theo dõi tiền đái tháo đường & rối loạn lipid máu
+
+DANH SÁCH CHỈ SỐ XÉT NGHIỆM:
+1. Glucose (đói): 6.8 mmol/L (Tham chiếu: 3.9 - 6.4) -> CAO
+2. HbA1c: 6.2 % (Tham chiếu: 4.0 - 6.0) -> CAO
+3. Ure máu: 5.4 mmol/L (Tham chiếu: 2.5 - 7.5) -> Bình thường
+4. Creatinin: 92 µmol/L (Tham chiếu: 53 - 106) -> Bình thường
+5. Acid Uric: 435 µmol/L (Tham chiếu: 180 - 420) -> CAO
+6. AST (GOT): 45 U/L (Tham chiếu: 10 - 40) -> CAO
+7. ALT (GPT): 58 U/L (Tham chiếu: 10 - 40) -> CAO
+8. Cholesterol TP: 5.8 mmol/L (Tham chiếu: 3.9 - 5.2) -> CAO
+9. Triglyceride: 2.4 mmol/L (Tham chiếu: 0.46 - 1.88) -> CAO
+10. HDL-C: 1.1 mmol/L (Tham chiếu: >= 1.03) -> Bình thường
+11. LDL-C: 3.8 mmol/L (Tham chiếu: < 3.4) -> CAO
+
+BÁC SĨ TRƯỞNG KHOA: TS.BS Lê Hoàng Long`,
     createdAt: '2026-09-12 10:45',
   },
 ];

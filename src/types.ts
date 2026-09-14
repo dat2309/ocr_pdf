@@ -43,6 +43,7 @@ export interface LabReport {
   unmappedCount: number;
   avgConfidence: number;
   rawSummary?: string;
+  rawText?: string;
   createdAt: string;
 }
 
