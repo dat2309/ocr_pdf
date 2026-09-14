@@ -36,22 +36,33 @@ const TEST_ALIASES: Array<{
   { code: 'MPV', patterns: [/\bMPV\b/i, /thể\s*tích\s*tiểu\s*cầu/i], catalogId: 'mpv' },
 
   // Biochemistry
-  { code: 'GLU', patterns: [/\bGLU\b/i, /glucose/i, /đường\s*huyết/i, /đường\s*máu/i], catalogId: 'glu' },
+  { code: 'GLU', patterns: [/\bGLU\b/i, /\bglucose\b/i, /đường\s*huyết/i, /đường\s*máu/i], catalogId: 'glu' },
   { code: 'HbA1c', patterns: [/\bHbA1c\b/i, /\bA1C\b/i], catalogId: 'hba1c' },
   { code: 'UREA', patterns: [/\bUREA?\b/i, /urê/i, /ure\s*máu/i], catalogId: 'ure' },
   { code: 'CREA', patterns: [/\bCREA(TININE)?\b/i, /creatinin/i], catalogId: 'creatinin' },
   { code: 'eGFR', patterns: [/\beGFR\b/i, /lọc\s*cầu\s*thận/i], catalogId: 'egfr' },
   { code: 'URIC', patterns: [/\bURIC\b/i, /acid\s*uric/i, /axit\s*uric/i], catalogId: 'acid_uric' },
-  { code: 'AST', patterns: [/\bAST\b/i, /\bSGOT\b/i, /\bGOT\b/i, /men\s*gan\s*ast/i], catalogId: 'ast_got' },
-  { code: 'ALT', patterns: [/\bALT\b/i, /\bSGPT\b/i, /\bGPT\b/i, /men\s*gan\s*alt/i], catalogId: 'alt_gpt' },
-  { code: 'GGT', patterns: [/\bGGT\b/i, /\bGamma-GT\b/i], catalogId: 'ggt' },
-  { code: 'CHOL', patterns: [/\bCHOL(ESTEROL)?\b/i, /cholesterol\s*toàn\s*phần/i], catalogId: 'cholesterol' },
+  { code: 'AST', patterns: [/\bAST\b/i, /\bSGOT\b/i, /\bGOT\b/i, /\bGOT\/ASAT\b/i, /men\s*gan\s*ast/i], catalogId: 'ast_got' },
+  { code: 'ALT', patterns: [/\bALT\b/i, /\bSGPT\b/i, /\bGPT\b/i, /\bGPT\/ALAT\b/i, /men\s*gan\s*alt/i], catalogId: 'alt_gpt' },
+  { code: 'GGT', patterns: [/\bGGT\b/i, /\bGamma-GT\b/i, /hoạt\s*độ\s*ggt/i], catalogId: 'ggt' },
+  { code: 'Non-HDL', patterns: [/\bNon\s*-\s*HDL\b/i], catalogId: 'non_hdl_c' },
+  { code: 'HDL-C', patterns: [/(?<!non\s*[- ]\s*)\bHDL(?:[- ]?C(?:holesterol)?)?\b/i], catalogId: 'hdl_c' },
+  { code: 'LDL-C', patterns: [/\bLDL(?:[- ]?C(?:holesterol)?)?\b/i], catalogId: 'ldl_c' },
+  { code: 'CHOL', patterns: [/(?<!non\s*-\s*|hdl\s*|ldl\s*)\bCHOL(?:ESTEROL)?\b/i, /cholesterol\s*toàn\s*phần/i], catalogId: 'cholesterol' },
   { code: 'TRIG', patterns: [/\bTRIG(LYCERIDE)?\b/i, /triglycerit/i], catalogId: 'triglyceride' },
-  { code: 'HDL-C', patterns: [/\bHDL[- ]?C?\b/i], catalogId: 'hdl_c' },
-  { code: 'LDL-C', patterns: [/\bLDL[- ]?C?\b/i], catalogId: 'ldl_c' },
 
-  // Urine
-  { code: 'pH', patterns: [/\bpH\b/i, /độ\s*ph/i], catalogId: 'uri_ph' },
+  // Electrolytes
+  { code: 'Na', patterns: [/\bNatri\b/i, /\bNa\+?\b/], catalogId: 'natri' },
+  { code: 'K', patterns: [/\bKali\b/i, /\bK\+?\b/], catalogId: 'kali' },
+  { code: 'Cl', patterns: [/\b(?:Định\s*lượng\s*)?Clo\b/i, /\bChloride\b/i], catalogId: 'clo' },
+  { code: 'Ca', patterns: [/\b(?:Định\s*lượng\s*)?Calci\b/i, /\bCalcium\b/i], catalogId: 'calci' },
+
+  // Thyroid / Immunology
+  { code: 'TSH', patterns: [/\bTSH\b/i, /thyroid\s*stimulating/i], catalogId: 'tsh' },
+  { code: 'FT4', patterns: [/\bFT4\b/i, /free\s*t4/i], catalogId: 'ft4' },
+
+  // Urine (do NOT use /i for bare pH to prevent matching "PH" in Vietnamese words like "THÙY PHẢI")
+  { code: 'pH', patterns: [/^(?:độ\s*)?pH\b/, /\bđộ\s*pH\b/i, /\bpH\s*nước\s*tiểu\b/i], catalogId: 'uri_ph' },
   { code: 'SG', patterns: [/\bSG\b/i, /tỷ\s*trọng/i, /specific\s*gravity/i], catalogId: 'uri_sg' },
   { code: 'PRO', patterns: [/\bPRO(TEIN)?\b/i, /đạm\s*niệu/i], catalogId: 'uri_pro' },
   { code: 'GLU-U', patterns: [/\bGLU[- ]?U\b/i, /đường\s*nước\s*tiểu/i], catalogId: 'uri_glu' },
@@ -102,13 +113,26 @@ export function findCatalogMatch(text: string): CatalogMatch | null {
   return null;
 }
 
-export function parseReferenceRange(refStr: string): { min?: number; max?: number } {
+export function parseReferenceRange(refStr: string, gender?: string): { min?: number; max?: number } {
   if (!refStr) return {};
 
-  const clean = refStr.replace(/,/g, '.').trim();
+  let clean = refStr.replace(/,/g, '.').trim();
 
-  // Min - Max e.g. "4.0 - 10.0" or "4.20 – 5.40"
-  const rangeMatch = clean.match(/([0-9.]+)\s*[-–—~to]\s*([0-9.]+)/i);
+  // Handle gender-specific blocks e.g. "Nam: 74 - 114; Nữ: 58 – 96" or "Nam <40 U/L; Nữ <31 U/L"
+  if (gender) {
+    const isFemale = /nữ|female/i.test(gender);
+    const isMale = /nam|male/i.test(gender) && !isFemale;
+    if (isFemale) {
+      const femaleMatch = clean.match(/nữ\s*[:.]?\s*([<≤>≥]?\s*[0-9.]+(?:\s*%?\s*[-–—~to]\s*[0-9.]+)?)/i);
+      if (femaleMatch) clean = femaleMatch[1];
+    } else if (isMale) {
+      const maleMatch = clean.match(/nam\s*[:.]?\s*([<≤>≥]?\s*[0-9.]+(?:\s*%?\s*[-–—~to]\s*[0-9.]+)?)/i);
+      if (maleMatch) clean = maleMatch[1];
+    }
+  }
+
+  // Min - Max e.g. "4.0 - 10.0" or "4.20 – 5.40" or "4.4%-6.0%"
+  const rangeMatch = clean.match(/([0-9.]+)\s*%?\s*[-–—~to]\s*([0-9.]+)/i);
   if (rangeMatch) {
     const min = parseFloat(rangeMatch[1]);
     const max = parseFloat(rangeMatch[2]);
@@ -119,14 +143,14 @@ export function parseReferenceRange(refStr: string): { min?: number; max?: numbe
   }
 
   // Less than e.g. "< 5.2" or "<= 100"
-  const lessMatch = clean.match(/[<≤]\s*([0-9.]+)/);
+  const lessMatch = clean.match(/(?:<=|[<≤])\s*([0-9.]+)/);
   if (lessMatch) {
     const max = parseFloat(lessMatch[1]);
     return { max: isNaN(max) ? undefined : max };
   }
 
   // Greater than e.g. "> 90" or ">= 1.03"
-  const greaterMatch = clean.match(/[>≥]\s*([0-9.]+)/);
+  const greaterMatch = clean.match(/(?:>=|[>≥])\s*([0-9.]+)/);
   if (greaterMatch) {
     const min = parseFloat(greaterMatch[1]);
     return { min: isNaN(min) ? undefined : min };
@@ -138,44 +162,41 @@ export function parseReferenceRange(refStr: string): { min?: number; max?: numbe
 export function evaluateStatus(
   valStr: string,
   refRange: string,
-  explicitFlag?: string
+  explicitFlag?: string,
+  gender?: string
 ): { status: LabTestStatus; numVal?: number; refMin?: number; refMax?: number } {
-  // Check explicit flags like 'H', 'High', '↑', '*', 'L', 'Low', '↓'
-  if (explicitFlag) {
-    const flag = explicitFlag.trim().toUpperCase();
-    if (flag === 'H' || flag === 'HIGH' || flag === '↑' || flag === '*') {
-      return { status: 'high' };
-    }
-    if (flag === 'L' || flag === 'LOW' || flag === '↓') {
-      return { status: 'low' };
-    }
-  }
-
-  const { min, max } = parseReferenceRange(refRange);
+  const { min, max } = parseReferenceRange(refRange, gender);
   const numVal = parseFloat(valStr.replace(/,/g, '.'));
+  let status: LabTestStatus = 'normal';
 
   if (isNaN(numVal)) {
     // Check text values like Âm tính / Dương tính
     if (/dương\s*tính|positive/i.test(valStr)) {
-      return { status: 'high' };
+      status = 'high';
+    } else if (/âm\s*tính|negative/i.test(valStr)) {
+      status = 'normal';
     }
-    if (/âm\s*tính|negative/i.test(valStr)) {
-      return { status: 'normal' };
+  } else {
+    if (max !== undefined && numVal > max) {
+      status = 'high';
+    } else if (min !== undefined && numVal < min) {
+      status = 'low';
+    } else if (min !== undefined || max !== undefined) {
+      status = 'normal';
     }
-    return { status: 'normal' };
   }
 
-  if (max !== undefined && numVal > max) {
-    return { status: 'high', numVal, refMin: min, refMax: max };
-  }
-  if (min !== undefined && numVal < min) {
-    return { status: 'low', numVal, refMin: min, refMax: max };
-  }
-  if (min !== undefined || max !== undefined) {
-    return { status: 'normal', numVal, refMin: min, refMax: max };
+  // Explicit flag takes effect or overrides/augments
+  if (explicitFlag) {
+    const flag = explicitFlag.trim().toUpperCase();
+    if (flag === 'H' || flag === 'HIGH' || flag === '↑' || flag === '*') {
+      status = 'high';
+    } else if (flag === 'L' || flag === 'LOW' || flag === '↓') {
+      status = 'low';
+    }
   }
 
-  return { status: 'normal', numVal };
+  return { status, numVal: isNaN(numVal) ? undefined : numVal, refMin: min, refMax: max };
 }
 
 /**
@@ -221,9 +242,9 @@ export function parseMedicalReportFromText(
     }
 
     // Patient Name
-    const nameMatch = line.match(/(?:họ\s*(?:và\s*)?tên|bệnh\s*nhân|tên\s*bn|người\s*bệnh)\s*[:.]\s*([A-ZÀ-Ỹa-zà-ỹ\s]{3,40})/i);
+    const nameMatch = line.match(/(?:họ\s*(?:và\s*)?tên|bệnh\s*nhân|tên\s*bn|người\s*bệnh|ông\/bà)\s*[:.]\s*([A-ZÀ-Ỹa-zà-ỹ\s]{3,40})/i);
     if (nameMatch && patient.fullName === 'Chưa rõ') {
-      patient.fullName = nameMatch[1].trim().toUpperCase();
+      patient.fullName = nameMatch[1].replace(/(?:ngày\s*sinh|ns|giới\s*tính|dob|gender).*/i, '').trim().toUpperCase();
     }
 
     // Gender
@@ -236,7 +257,7 @@ export function parseMedicalReportFromText(
     }
 
     // Birth Year or Age
-    const yearMatch = line.match(/(?:năm\s*sinh|ns|ngày\s*sinh|tuổi)\s*[:.]\s*([0-9]{1,4}(?:\s*tuổi)?)/i);
+    const yearMatch = line.match(/(?:năm\s*sinh|ns|ngày\s*sinh|tuổi)\s*[:.]\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[0-9]{1,4}(?:\s*tuổi)?)/i);
     if (yearMatch && patient.birthYearOrAge === 'Chưa rõ') {
       patient.birthYearOrAge = yearMatch[1].trim();
     } else if (patient.birthYearOrAge === 'Chưa rõ') {
@@ -259,7 +280,7 @@ export function parseMedicalReportFromText(
     }
 
     // Sample Date
-    const sampleDateMatch = line.match(/(?:ngày\s*lấy\s*mẫu|ngày\s*nhận|thời\s*gian\s*lấy)\s*[:.]\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}(?:\s+[0-9]{1,2}:[0-9]{1,2})?)/i);
+    const sampleDateMatch = line.match(/(?:lấy\s*mẫu|ngày\s*lấy\s*mẫu|ngày\s*nhận|thời\s*gian\s*lấy)\s*[:.]\s*(?:[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}\s+ngày\s+)?([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})/i);
     if (sampleDateMatch) {
       patient.sampleDate = sampleDateMatch[1].trim();
     }
@@ -286,15 +307,37 @@ export function parseMedicalReportFromText(
   // or "Glucose: 5.8 mmol/L (3.9 - 6.4)"
   // or "HGB 11.2 g/dL 12.0 - 15.5 L"
 
+  // Track if we are inside a diagnosis or administrative header block
+  let inAdminSection = false;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Skip common header/footer lines
+    // Section headers that reset or enter admin sections
+    if (/^chẩn\s*đoán|\(diagnosis\)/i.test(line)) {
+      inAdminSection = true;
+      continue;
+    }
+    if (/^xn\s*(sinh\s*hóa|miễn\s*dịch|huyết\s*học|nước\s*tiểu)|\(biochemistry\)|\(immunology\)|\(hematology\)|^xét\s*nghiệm\s*kết\s*quả/i.test(line)) {
+      inAdminSection = false;
+      continue;
+    }
+
+    // Skip lines in admin/diagnosis section unless a known test line begins
+    if (inAdminSection) {
+      if (/^(?:glucose|creatinine|cholesterol|triglyceride|got|gpt|ggt|ast|alt|ure|wbc|rbc|plt|natri|kali|clo|calci|tsh|ft4|hba1c)\b/i.test(line)) {
+        inAdminSection = false;
+      } else {
+        continue;
+      }
+    }
+
+    // Skip common administrative/footer lines
     if (
-      /bệnh\s*viện|phòng\s*khám|họ\s*và\s*tên|bác\s*sĩ|chữ\s*ký|trưởng\s*khoa|kỹ\s*thuật\s*viên|tổng\s*tiền|địa\s*chỉ|hotline/i.test(
+      /bệnh\s*viện|phòng\s*khám|trung\s*tâm|lý\s*do|bác\s*sĩ|họ\s*(?:và\s*)?tên|ông\/bà|địa\s*chỉ|mã\s*số|mã\s*bn|số\s*phiếu|số\s*hồ\s*sơ|số\s*nhập\s*viện|bệnh\s*phẩm|chất\s*lượng|nơi\s*gửi|quốc\s*tịch|passport|xác\s*nhận|nhận\s*mẫu|nhân\s*viên|phát\s*hành|ghi\s*chú|đạt\s*chuẩn|quy\s*trình|laboratory|procedure|sample\s*id|receiving|specimens|approved|address|dob|receipt/i.test(
         line
       ) &&
-      !line.match(/\b(wbc|rbc|plt|glu|ast|alt|ure|crea)\b/i)
+      !line.match(/^(?:glucose|creatinine|cholesterol|triglyceride|got|gpt|ggt|ast|alt|ure|wbc|rbc|plt|natri|kali|clo|calci|tsh|ft4|hba1c)/i)
     ) {
       continue;
     }
@@ -302,44 +345,75 @@ export function parseMedicalReportFromText(
     // Check if line contains a known lab test match
     const catalogMatch = findCatalogMatch(line);
 
-    // Look for numbers representing results and reference ranges
-    // Pattern: [TestName/Code] ... [NumberVal] ... [Unit]? ... [RefRange]? ... [Flag]?
-    const numberRegex = /([0-9]+[.,][0-9]+|[0-9]+)/g;
-    const allNumbers = line.match(numberRegex);
-
     if (catalogMatch) {
+      // If this test was already processed (e.g. SI mmol/L), skip duplicate secondary line (e.g. . mg/dL)
       if (processedCodes.has(catalogMatch.code)) continue;
 
-      // Extract value
-      let testVal = '';
-      let testUnit = catalogMatch.defaultUnit;
-      let testRefRange = catalogMatch.defaultRefRange;
-      let explicitFlag = '';
+      // Strip procedure numbers, ISO ** marks, formula names, and units tags before extracting flags or values
+      const strippedLine = line
+        .replace(/SH\/QTKT-[0-9*]+/gi, '')
+        .replace(/\*{2,}/g, '') // remove ISO ** accreditation marks
+        .replace(/\(CKD-EPI\s*[0-9]+\)/gi, '')
+        .replace(/\(HPLC[A-Z\s]*\)/gi, '')
+        .replace(/\b10\^[0-9]+\/L\b/gi, '')
+        .replace(/\bml\/ph\/1\.73\s*m2\b/gi, '');
 
-      // Check for flag (H, L, *, High, Low, ↑, ↓)
-      const flagMatch = line.match(/\b([HL])\b|[↑↓*]/);
-      if (flagMatch) {
-        explicitFlag = flagMatch[0];
+      // Check for explicit abnormal flag:
+      // 1) Single asterisk directly following a number or space: (?<=[0-9.,]\s*)\*(?!\*)
+      // 2) Arrow ↑ or ↓
+      // 3) Standalone [HL] not preceded by slash or letter
+      let explicitFlag = '';
+      const starMatch = strippedLine.match(/(?<=[0-9.,]\s*)\*(?!\*)/) || strippedLine.match(/[↑↓]/);
+      if (starMatch) {
+        explicitFlag = starMatch[0];
+      } else {
+        const hlMatch = strippedLine.match(/(?<![/a-zA-Z0-9])([HL])(?![a-zA-Z0-9])/);
+        if (hlMatch) {
+          explicitFlag = hlMatch[1];
+        }
       }
 
-      // Try to parse reference range from line
-      const refMatch = line.match(/([0-9]+[.,]?[0-9]*\s*[-–—~]\s*[0-9]+[.,]?[0-9]*|[<≤>≥]\s*[0-9]+[.,]?[0-9]*)/);
+      // Reference range from line, previous line, or next line
+      let testRefRange = catalogMatch.defaultRefRange;
+      const refMatch = strippedLine.match(/([0-9]+[.,]?[0-9]*\s*%?\s*[-–—~]\s*[0-9]+[.,]?[0-9]*|(?:>=|<=|[<≤>≥])\s*[0-9]+[.,]?[0-9]*|Nam:.*Nữ:.*)/i);
       if (refMatch) {
-        testRefRange = refMatch[1].trim();
+        testRefRange = refMatch[0].trim();
+      } else if (i > 0 && /^[0-9<≤>≥]|Nam:.*Nữ:/.test(lines[i - 1])) {
+        // Look at previous line if OCR placed reference range above
+        testRefRange = lines[i - 1].replace(/SH\/QTKT-[0-9*]+/gi, '').replace(/\*{2,}/g, '').replace(/\(HPLC[A-Z\s]*\)/gi, '').trim();
+      } else if (i + 1 < lines.length && /^[0-9<≤>≥]|Nam:.*Nữ:/.test(lines[i + 1])) {
+        // Or next line
+        testRefRange = lines[i + 1].replace(/SH\/QTKT-[0-9*]+/gi, '').replace(/\*{2,}/g, '').trim();
       }
 
       // Find unit in line if present
-      const unitMatch = line.match(/(10\^[0-9]+\/L|G\/L|T\/L|g\/dL|g\/L|mmol\/L|µmol\/L|umol\/L|mg\/dL|U\/L|UI\/mL|%|fL|pg|Leu\/µL)/i);
+      let testUnit = catalogMatch.defaultUnit;
+      const unitMatch = line.match(/(10\^[0-9]+\/L|G\/L|T\/L|g\/dL|g\/L|mmol\/L|µmol\/L|umol\/L|mg\/dL|U\/L|UI\/mL|mIU\/L|pmol\/L|%|fL|pg|mL\/phút|Leu\/µL)/i);
       if (unitMatch) {
         testUnit = unitMatch[0];
       }
 
-      // Find value: the number that appears after the test code/name and before the unit or reference range
-      if (allNumbers && allNumbers.length > 0) {
-        // If there's a reference range, don't take numbers that are part of the reference range
-        const refNumbers: string[] = testRefRange.match(numberRegex) || [];
-        const candidateNumbers = allNumbers.filter((n) => !refNumbers.includes(n));
+      // Clean line of test code and known acronyms so digits in code (e.g. FT4, HbA1c, eGFR) aren't taken as value
+      let valueSearchLine = strippedLine
+        .replace(/\bHbA1c\b/gi, '')
+        .replace(/\bFT4\b/gi, '')
+        .replace(/\beGFR\b/gi, '')
+        .replace(/\bNon\s*-\s*HDL\b/gi, '')
+        .replace(/\bHDL\b/gi, '')
+        .replace(/\bLDL\b/gi, '');
 
+      if (catalogMatch.code) {
+        valueSearchLine = valueSearchLine.replace(new RegExp(`\\b${catalogMatch.code}\\b`, 'gi'), '');
+      }
+
+      // Extract value
+      const numberRegex = /([0-9]+[.,][0-9]+|[0-9]+)/g;
+      const allNumbers = valueSearchLine.match(numberRegex) || [];
+      const refNumbers = testRefRange.match(numberRegex) || [];
+
+      let testVal = '';
+      if (allNumbers.length > 0) {
+        const candidateNumbers = allNumbers.filter((n) => !refNumbers.includes(n));
         if (candidateNumbers.length > 0) {
           testVal = candidateNumbers[0];
         } else {
@@ -352,7 +426,7 @@ export function parseMedicalReportFromText(
       }
 
       if (testVal) {
-        const evalRes = evaluateStatus(testVal, testRefRange, explicitFlag);
+        const evalRes = evaluateStatus(testVal, testRefRange, explicitFlag, patient.gender);
         processedCodes.add(catalogMatch.code);
 
         tests.push({
