@@ -1,7 +1,5 @@
 import React, { useState, useRef } from 'react';
 import {
-  ZoomIn,
-  ZoomOut,
   RotateCw,
   RotateCcw,
   Maximize2,
@@ -9,7 +7,6 @@ import {
   RefreshCw,
   FileText,
   ImageIcon,
-  Eye,
 } from 'lucide-react';
 import { LabReport } from '../types';
 
@@ -22,7 +19,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   report,
   onDropNewFile,
 }) => {
-  const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -32,12 +28,9 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const handleZoomIn = () => setZoom((prev) => Math.min(prev + 0.25, 3.5));
-  const handleZoomOut = () => setZoom((prev) => Math.max(prev - 0.25, 0.4));
   const handleRotateCw = () => setRotation((prev) => (prev + 90) % 360);
   const handleRotateCcw = () => setRotation((prev) => (prev - 90 + 360) % 360);
   const handleReset = () => {
-    setZoom(1);
     setRotation(0);
     setPan({ x: 0, y: 0 });
   };
@@ -68,12 +61,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   };
 
   const handleMouseUp = () => setIsDragging(false);
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.15 : 0.15;
-    setZoom((prev) => Math.min(Math.max(prev + delta, 0.4), 3.5));
-  };
 
   if (!report) {
     return (
@@ -107,9 +94,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           <span className="font-medium text-slate-200 truncate max-w-[200px] sm:max-w-xs" title={report.fileName}>
             {report.fileName}
           </span>
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
-            {Math.round(zoom * 100)}%
-          </span>
         </div>
 
         <div className="flex items-center space-x-1.5">
@@ -132,13 +116,12 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
       >
         {activeTab === 'preview' ? (
           <div
             className="transition-transform duration-75 origin-center flex items-center justify-center p-4"
             style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+              transform: `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg)`,
             }}
           >
             {isPdf && report.fileDataUrl.startsWith('data:application/pdf') ? (
@@ -214,23 +197,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
       {/* Floating Toolbar Controls at Bottom (Matching design reference) */}
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 text-white rounded-full px-3 py-1.5 shadow-xl flex items-center space-x-2 z-20">
-        <button
-          type="button"
-          onClick={handleZoomIn}
-          className="p-1.5 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white"
-          title="Phóng to (+)"
-        >
-          <ZoomIn className="w-4 h-4" />
-        </button>
-        <button
-          type="button"
-          onClick={handleZoomOut}
-          className="p-1.5 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white"
-          title="Thu nhỏ (-)"
-        >
-          <ZoomOut className="w-4 h-4" />
-        </button>
-        <div className="w-px h-4 bg-slate-700" />
         <button
           type="button"
           onClick={handleRotateCcw}
