@@ -1,7 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
-import { createWorker } from 'tesseract.js';
+import { createWorker, PSM } from 'tesseract.js';
 import { LabReport } from '../types';
-import { parseMedicalReportFromText, cleanOcrArtifacts } from './medicalParser';
+import { parseMedicalReportFromText } from './medicalParser';
 
 // Configure PDF.js worker locally using Vite asset resolution (offline-first, no CDN dependency)
 if (typeof window !== 'undefined') {
@@ -88,8 +88,10 @@ export async function extractTextFromPdf(
       }
     }
 
-    // Check if extracted digital text actually contains standard medical lab tests
-    const hasDigitalLabTests = /\b(glucose|creatinine|cholesterol|triglycerid|ast|alt|ggt|ure|hba1c|wbc|rbc|plt|natri|kali|clo|calci|got|gpt|hgb|hct|mcv|mch)\b/i.test(pageText);
+    // Only fall back to OCR when PDF text is truly sparse. Some valid reports use
+    // uncommon Vietnamese labels, so a keyword check can accidentally replace good
+    // embedded text with lower-quality OCR output.
+    const hasUsableDigitalText = pageText.replace(/\s+/g, '').length >= 120;
 
     // Render page to canvas for preview & scanned fallback
     if (typeof document !== 'undefined') {
@@ -104,8 +106,8 @@ export async function extractTextFromPdf(
           const pageDataUrl = canvas.toDataURL('image/jpeg', 0.85);
           pageDataUrls.push(pageDataUrl);
 
-          // If digital text is almost empty (< 120 chars) or lacks medical lab keywords, it's a scanned PDF
-          if (pageText.trim().length < 120 || !hasDigitalLabTests) {
+          // If digital text is almost empty, treat the page as a scanned PDF.
+          if (!hasUsableDigitalText) {
             onProgress?.({
               message: `Trang ${pageNum} là ảnh scan, đang chạy Tesseract OCR tối ưu hóa...`,
               progress: 60,
@@ -275,12 +277,13 @@ export async function extractTextFromImage(
   try {
     await worker.setParameters({
       preserve_interword_spaces: '1',
+      tessedit_pageseg_mode: PSM.AUTO,
+      user_defined_dpi: '300',
     });
 
-    const result = await worker.recognize(processedSource as any);
+    const result = await worker.recognize(processedSource as any, { rotateAuto: true });
     onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
-    // Process and normalize raw data immediately after OCR scanning
-    return cleanOcrArtifacts(result.data.text);
+    return result.data.text.trim();
   } finally {
     await worker.terminate();
   }
@@ -337,7 +340,7 @@ export async function processMedicalFile(
     unmappedCount: parsedPartial.unmappedCount || 0,
     avgConfidence: parsedPartial.avgConfidence || 90,
     rawSummary: parsedPartial.rawSummary || `Đọc được ${parsedPartial.tests?.length || 0} chỉ số`,
-    rawText: parsedPartial.rawText || extractedText || '',
+    rawText: extractedText || parsedPartial.rawText || '',
     createdAt: new Date().toISOString(),
   };
 
