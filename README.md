@@ -1,62 +1,70 @@
-# 🔬 LabScan OCR - Trích Xuất Kết Quả Xét Nghiệm Sang Excel
+# 🔬 LabScan OCR - Trích Xuất Kết Quả Xét Nghiệm Sang Excel (100% Client-Side)
 
-Ứng dụng web tự động nhận diện ký tự (OCR) và bóc tách thông tin từ các phiếu kết quả xét nghiệm y tế (Ảnh chụp hoặc tệp PDF), cho phép đối chiếu trực quan 2 cột song song và xuất dữ liệu ra file **Microsoft Excel (.xlsx)** chuẩn xác.
+Ứng dụng web chạy **100% trên trình duyệt (Client-Side SPA)** giúp tự động nhận diện ký tự (OCR) và bóc tách thông tin từ các phiếu kết quả xét nghiệm y tế (Ảnh chụp hoặc tệp PDF), cho phép đối chiếu trực quan song song và xuất dữ liệu ra file **Microsoft Excel (.xlsx)** chuẩn xác.
 
-Hệ thống hoạt động **Offline-first / On-premise**, toàn bộ quá trình OCR và bóc tách dữ liệu được thực hiện trực tiếp trên máy client hoặc máy chủ nội bộ, **không gửi dữ liệu bệnh nhân ra dịch vụ AI đám mây bên thứ ba**, đảm bảo tuyệt đối quyền riêng tư và bảo mật y tế.
+Toàn bộ quá trình đọc PDF, nhận diện ảnh OCR và bóc tách dữ liệu được thực hiện **ngay trong bộ nhớ RAM của trình duyệt người dùng**. **Không có máy chủ trung gian, không gửi dữ liệu ra ngoài Internet**, đảm bảo tuyệt đối 100% quyền riêng tư và bảo mật dữ liệu y tế theo chuẩn HIPAA / GDPR.
 
 ---
 
 ## ✨ Tính Năng Nổi Bật
 
-- 📄 **Hỗ trợ đa định dạng tập tin**:
-  - Hình ảnh: `PNG`, `JPG`, `JPEG`, `WebP` (ảnh chụp phiếu từ điện thoại, máy scan).
-  - Tệp PDF: Nhận diện trực tiếp PDF điện tử bằng **PDF.js**; tự động render canvas và chạy **Tesseract OCR** đối với PDF dạng scan ảnh.
-- 👁️ **Giao diện đối chiếu song song (Dual-Pane Workspace)**:
-  - **Cột trái**: Bộ xem tài liệu gốc hỗ trợ phóng to (zoom), thu nhỏ, xoay ảnh, kéo thả góc nhìn (pan), xem toàn màn hình và xem metadata phiếu.
-  - **Cột phải**: Bảng kết quả xét nghiệm số hóa có thể chỉnh sửa trực tiếp.
-- 🧠 **Bóc tách thông tin thông minh (Medical Parser)**:
-  - Tự động nhận diện thông tin hành chính: Tên bệnh nhân, giới tính, năm sinh/tuổi, mã hồ sơ (PID/SID), ngày lấy mẫu/trả kết quả, bác sĩ, cơ sở y tế.
-  - Tự động bóc tách các chỉ số: Tên chỉ số, mã y khoa (WBC, RBC, HGB, Glucose, AST, ALT, Creatinine...), kết quả đo, đơn vị và khoảng tham chiếu chuẩn.
-- ⚖️ **Tự động đối chiếu & Cảnh báo bất thường**:
-  - So sánh kết quả đo với ngưỡng tham chiếu để đánh giá trạng thái: **Bình thường**, **Cao ↑**, **Thấp ↓**, **Bất thường**.
-  - Tự động tính toán lại trạng thái khi người dùng chỉnh sửa giá trị.
-- 🎯 **Chuẩn hóa danh mục y tế (`LAB_CATALOG`)**:
-  - Cảnh báo các chỉ số lạ hoặc chưa khớp danh mục chuẩn (`isUnmapped`).
-  - Cho phép người dùng chọn khớp nhanh danh mục bằng dropdown.
-- 📊 **Xuất bảng tính Excel đa năng**:
-  - Tùy chỉnh bật/tắt từng cột khi xuất (STT, Mã, Tên chỉ số, Kết quả, Đơn vị, Tham chiếu, Đánh giá, Ghi chú).
-  - Tự động format tiêu đề, thông tin bệnh nhân và độ rộng cột file `.xlsx`.
-  - Hỗ trợ nút **Sao chép dữ liệu (Clipboard)** định dạng TSV để dán trực tiếp vào Google Sheets / Excel chỉ với 1 click.
-- 🧪 **Dữ liệu mẫu tích hợp sẵn**: Thử nghiệm nhanh với các mẫu phiếu thực tế (Huyết học CBC, Sinh hóa máu) mà không cần chuẩn bị sẵn file.
+- 🛡️ **100% Client-Side & Bảo Mật Tuyệt Đối**:
+  - Không cần máy chủ backend, không cần cơ sở dữ liệu.
+  - Toàn bộ dữ liệu bệnh nhân và hình ảnh phiếu xét nghiệm chỉ tồn tại trong trình duyệt máy bạn, tự hủy khi đóng tab.
+  - Có thể triển khai miễn phí vĩnh viễn trên **GitHub Pages**, Vercel, Netlify hoặc chạy offline trong mạng nội bộ bệnh viện (Intranet).
+
+- 📄 **Hỗ trợ đa định dạng tài liệu**:
+  - **Tệp PDF**: Nhận diện trực tiếp PDF điện tử bằng **PDF.js** (xử lý siêu tốc trong 0.5 - 1 giây).
+  - **Hình ảnh**: `PNG`, `JPG`, `JPEG`, `WebP` (ảnh chụp phiếu xét nghiệm từ điện thoại, máy scan) qua **Tesseract.js OCR**.
+
+- 👁️ **Giao diện đối chiếu song song tiện lợi (Dual-Pane Workspace)**:
+  - **Cột trái**: 
+    - Tab **Xem tài liệu**: Xem ảnh/PDF phiếu gốc rõ nét, vừa vặn khung nhìn.
+    - Tab **Văn bản thô (Raw Text)**: Xem toàn bộ nội dung text bóc tách được và có nút **Sao chép văn bản thô** nhanh.
+  - **Cột phải**: Bảng kết quả xét nghiệm số hóa, hỗ trợ chỉnh sửa trực tiếp từng ô dữ liệu.
+
+- 🧠 **Bộ bóc tách y tế thông minh (Medical Rule-based Parser)**:
+  - **Thông tin hành chính bệnh nhân**: Tự động nhận diện Họ và tên, Giới tính, Ngày sinh / Tuổi, Mã bệnh nhân / Số hồ sơ, Bác sĩ chỉ định, Cơ sở khám chữa bệnh, Ngày lấy mẫu / trả kết quả.
+  - **Khử nhiễu chính xác**: Tự động bỏ qua các chẩn đoán ICD-10 (như *I10*, *E78.2*, *E34*...), bỏ qua các nhãn chuẩn kiểm định ISO (*\*\**), các mã quy trình kỹ thuật (*SH/QTKT-xx*), và các ký hiệu công thức (*CKD-EPI 2021*, *HPLC*...).
+  - **Định danh xét nghiệm**: Nhận diện chính xác tên chỉ số, mã y khoa (Glucose, HbA1c, Creatinine, eGFR, Acid Uric, Men gan AST/ALT/GGT, Mỡ máu Cholesterol/Triglyceride/HDL/LDL/Non-HDL, Điện giải đồ Na/K/Cl/Ca, Tuyến giáp TSH/FT4, Tổng phân tích tế bào máu...).
+
+- ⚖️ **Đối chiếu khoảng tham chiếu & Đánh giá theo Giới tính**:
+  - Tự động nhận diện giới tính bệnh nhân (**Nam** hoặc **Nữ**) để đối chiếu đúng khoảng tham chiếu tương ứng (ví dụ: *Creatinine*, *Men gan*...).
+  - Tự động đánh dấu trạng thái: **Bình thường** (Xanh lá), **Cao ↑** (Đỏ), **Thấp ↓** (Xanh dương).
+  - Tự động tính toán lại trạng thái tức thì khi người dùng chỉnh sửa giá trị.
+
+- 📊 **Xuất bảng tính Excel chuyên nghiệp (.xlsx)**:
+  - Tùy chỉnh chọn cột cần xuất (STT, Mã, Tên chỉ số, Kết quả, Đơn vị, Khoảng tham chiếu, Đánh giá, Ghi chú).
+  - Tự động định dạng bảng: tiêu đề in đậm, thông tin bệnh nhân ở đầu trang, căn giữa/phải theo chuẩn số liệu y khoa, tự động giãn độ rộng cột.
+  - Hỗ trợ nút **Sao chép bảng (TSV)** để dán trực tiếp vào Google Sheets / Excel chỉ bằng 1 cú click.
 
 ---
 
-## 🏗️ Kiến Trúc Hệ Thống
+## 🏗️ Cơ Chế Hoạt Động
 
-```
-Người dùng tải ảnh/PDF xét nghiệm
-       │
-       ▼
-┌────────────────────────────────────────────────────────┐
-│  Bộ máy OCR (Client-side / Browser-first)               │
-│  ├─ PDF.js: Trích xuất text số & dựng layout dòng       │
-│  └─ Tesseract.js (vie + eng): OCR ảnh & fallback PDF scan│
-└────────────────────────────────────────────────────────┘
-       │
-       ▼ (Raw Extracted Text)
-┌────────────────────────────────────────────────────────┐
-│  Medical Rule-based Parser (src/utils/medicalParser.ts) │
-│  ├─ Trích xuất Metadata bệnh nhân & cơ sở y tế         │
-│  ├─ So khớp Alias & Từ điển chuẩn (src/data/labCatalog)│
-│  └─ Đánh giá ngưỡng tham chiếu (min/max -> High/Low)   │
-└────────────────────────────────────────────────────────┘
-       │
-       ▼ (Structured LabReport Object)
-┌────────────────────────────────────────────────────────┐
-│  Giao diện tương tác & Xuất dữ liệu                     │
-│  ├─ LabResultsTable: Sửa giá trị, map danh mục         │
-│  └─ excelExporter: Tạo file .xlsx hoặc copy Clipboard  │
-└────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Người dùng tải file lên] --> B{Kiểm tra loại file}
+    
+    B -->|File PDF| C[PDF.js Web Worker]
+    B -->|File Ảnh JPG / PNG| D[Tesseract.js OCR Worker]
+    
+    C -->|Trích xuất vector text & render canvas| E[Chuỗi văn bản thô - Raw Text]
+    D -->|Nhận diện chữ vie + eng qua WebAssembly| E
+    
+    E --> F[Bộ bóc tách y tế - medicalParser.ts]
+    
+    subgraph Client Browser RAM [Xử lý hoàn toàn trong bộ nhớ RAM trình duyệt]
+        F --> F1[1. Tách thông tin bệnh nhân: Tên, Giới tính, Ngày sinh, Mã BN]
+        F --> F2[2. Lọc bỏ nhiễu: Chẩn đoán ICD, nhãn ISO **, mã quy trình]
+        F --> F3[3. Khớp danh mục labCatalog: Glucose, Creatinine, AST, ALT...]
+        F --> F4[4. Đánh giá lâm sàng: Đối chiếu ngưỡng theo Giới tính Nam/Nữ]
+    end
+    
+    F1 & F2 & F3 & F4 --> G[Hiển thị Bảng kết quả trên giao diện React]
+    G --> H[Người dùng kiểm tra & chỉnh sửa trực tiếp nếu muốn]
+    H --> I[Xuất Excel bằng SheetJS xlsx]
+    I --> J[Tải file .xlsx về máy tính]
 ```
 
 ---
@@ -65,99 +73,103 @@ Người dùng tải ảnh/PDF xét nghiệm
 
 ```bash
 trích-xuất-kết-quả-xét-nghiệm-sang-excel/
-├── .env.example              # Mẫu biến môi trường
-├── .gitignore                # Khai báo các file bỏ qua khi commit git
-├── index.html                # HTML entry point của ứng dụng
-├── metadata.json             # Cấu hình thông tin ứng dụng
-├── package.json              # Quản lý scripts & dependencies
-├── server.ts                 # Express server & API fallback OCR
-├── tsconfig.json             # Cấu hình trình biên dịch TypeScript
-├── vite.config.ts            # Cấu hình bundler Vite & TailwindCSS
-├── eng.traineddata           # Dữ liệu ngôn ngữ tiếng Anh Tesseract OCR
-├── vie.traineddata           # Dữ liệu ngôn ngữ tiếng Việt Tesseract OCR
-│
-└── src/
-    ├── App.tsx               # Component chính điều phối luồng ứng dụng
-    ├── index.css             # TailwindCSS v4 stylesheet
-    ├── main.tsx              # React mounting entry point
-    ├── types.ts              # Định nghĩa types (PatientInfo, LabTestItem, LabReport)
-    ├── vite-env.d.ts         # Khai báo kiểu môi trường Vite
-    │
-    ├── components/
-    │   ├── DocumentViewer.tsx     # Cột xem và thao tác tài liệu gốc (zoom, rotate, pan)
-    │   ├── ExcelExportModal.tsx   # Modal tùy chọn cột & xuất file Excel (.xlsx)
-    │   ├── FileUploaderModal.tsx  # Modal kéo thả/tải file & thanh tiến trình
-    │   ├── Header.tsx             # Thanh menu điều hướng & chọn mẫu test nhanh
-    │   └── LabResultsTable.tsx    # Bảng kết quả xét nghiệm tương tác & lọc dữ liệu
-    │
-    ├── data/
-    │   ├── labCatalog.ts          # Từ điển danh mục xét nghiệm chuẩn & đơn vị đo
-    │   └── sampleReports.ts       # Dữ liệu mẫu kiểm thử
-    │
-    └── utils/
-        ├── excelExporter.ts       # Xây dựng bảng tính & tải file .xlsx (SheetJS)
-        ├── medicalParser.ts       # Bộ bóc tách thông tin y khoa bằng Regex Rule
-        └── ocrEngine.ts           # Động cơ OCR kết hợp PDF.js và Tesseract.js
+├── docs/                     # Bản build tĩnh triển khai trực tiếp lên GitHub Pages
+│   ├── index.html            # Trang chủ sau khi build
+│   └── assets/               # JS bundle, CSS và pdf.worker
+├── public/
+│   └── .nojekyll             # Cấu hình tránh bỏ qua thư mục assets trên GitHub Pages
+├── src/
+│   ├── components/
+│   │   ├── DocumentViewer.tsx     # Cột trái: xem tài liệu gốc & tab xem Raw OCR Text
+│   │   ├── ExcelExportModal.tsx   # Modal tùy chọn cột & xuất file Excel (.xlsx)
+│   │   ├── FileUploaderModal.tsx  # Modal kéo thả/tải file & tiến trình OCR
+│   │   ├── Header.tsx             # Thanh menu điều hướng & chọn mẫu test nhanh
+│   │   └── LabResultsTable.tsx    # Bảng kết quả xét nghiệm tương tác & lọc dữ liệu
+│   ├── data/
+│   │   ├── labCatalog.ts          # Từ điển danh mục xét nghiệm chuẩn y tế
+│   │   └── sampleReports.ts       # Dữ liệu mẫu kiểm thử nhanh
+│   ├── utils/
+│   │   ├── excelExporter.ts       # Xuất file Excel (.xlsx) & copy Clipboard
+│   │   ├── medicalParser.ts       # Bộ bóc tách thông tin y tế bằng Regex Rule
+│   │   └── ocrEngine.ts           # Động cơ đọc PDF (PDF.js) & OCR ảnh (Tesseract.js)
+│   ├── App.tsx                    # Component chính điều phối luồng ứng dụng
+│   ├── index.css                  # TailwindCSS stylesheet
+│   ├── main.tsx                   # React mounting entry point
+│   └── types.ts                   # Định nghĩa kiểu dữ liệu TypeScript
+├── index.html                # HTML entry point phát triển
+├── package.json              # Quản lý dependencies & scripts chuẩn Vite
+├── tsconfig.json             # Cấu hình TypeScript
+└── vite.config.ts            # Cấu hình Vite bundler & đường dẫn base GitHub Pages
 ```
 
 ---
 
-## 🚀 Cài Đặt & Chạy Ứng Dụng
+## 🚀 Cài Đặt & Chạy Cục Bộ
 
 ### 1. Yêu cầu môi trường
-- **Node.js**: Phiên bản `>= 18.0.0` (khuyến nghị `20.x` hoặc `22.x`).
+- **Node.js**: Phiên bản `>= 18.0.0` (khuyên dùng `20.x` hoặc `22.x`).
 - **npm** (hoặc `pnpm`, `bun`).
 
-### 2. Cài đặt các gói phụ thuộc
+### 2. Cài đặt các thư viện
 ```bash
 npm install
 ```
 
-### 3. Khởi chạy ở chế độ phát triển (Development)
+### 3. Khởi chạy môi trường phát triển (Development)
 ```bash
 npm run dev
 ```
-Ứng dụng sẽ khởi động tại: **http://localhost:3000** (bao gồm cả giao diện web và API server).
+Trình duyệt sẽ mở tại địa chỉ: **http://localhost:5173** (khởi động tức thì với Vite).
 
-### 4. Build sản phẩm (Production)
+### 4. Kiểm tra kiểu dữ liệu TypeScript
+```bash
+npm run lint
+```
+
+### 5. Build bản xuất bản (Production)
 ```bash
 npm run build
 ```
-Lệnh trên sẽ:
-1. Đóng gói mã nguồn frontend vào thư mục `dist/` bằng Vite.
-2. Bundle server Node.js thành `dist/server.cjs` bằng esbuild.
+Lệnh trên sẽ đóng gói toàn bộ mã nguồn vào thư mục `docs/` để sẵn sàng triển khai lên GitHub Pages.
 
-### 5. Khởi chạy bản Production
-```bash
-npm start
-```
+---
 
-### 6. Triển khai lên GitHub Pages (Miễn phí)
-Dự án đã tích hợp sẵn GitHub Actions workflow tự động deploy lên GitHub Pages khi push code lên nhánh `main`:
-1. Vào repository trên GitHub > chọn tab **Settings**.
-2. Chọn mục **Pages** ở thanh bên trái.
-3. Tại phần **Build and deployment** > **Source**, chọn **GitHub Actions**.
-4. Mỗi khi bạn `git push` lên nhánh `main`, hệ thống sẽ tự động build và xuất bản trang web tại địa chỉ:
+## 🌐 Triển Khai Lên GitHub Pages (Miễn Phí 100%)
+
+Dự án đã được cấu hình sẵn để xuất bản trực tiếp từ thư mục `docs/`:
+
+1. Đẩy mã nguồn lên repository GitHub của bạn:
+   ```bash
+   git add .
+   git commit -m "deploy: update build"
+   git push origin main
+   ```
+2. Trên GitHub, vào repository của bạn > chọn tab **Settings**.
+3. Chọn mục **Pages** ở danh mục bên trái.
+4. Tại phần **Build and deployment**:
+   - **Source**: Chọn `Deploy from a branch`.
+   - **Branch**: Chọn nhánh `main` và thư mục `/docs`.
+   - Bấm **Save**.
+5. Sau 1 - 2 phút, trang web của bạn sẽ hoạt động trực tiếp tại địa chỉ:  
    `https://<username>.github.io/<ten-repo>/`
 
 ---
 
 ## 🛠️ Công Nghệ Sử Dụng
 
-- **Frontend**: [React 19](https://react.dev/), [TypeScript](https://www.typescriptlang.org/), [TailwindCSS v4](https://tailwindcss.com/), [Lucide React](https://lucide.dev/), [Motion](https://motion.dev/).
-- **Bộ máy xử lý tài liệu**:
-  - [PDF.js (`pdfjs-dist`)](https://mozilla.github.io/pdf.js/): Bóc tách text số & render canvas cho PDF.
-  - [Tesseract.js](https://tesseract.projectnaptha.com/): Nhận diện ký tự quang học (OCR) tiếng Việt & tiếng Anh chạy bằng WebAssembly.
-  - [SheetJS (`xlsx`)](https://docs.sheetjs.com/): Tạo và tải file Microsoft Excel `.xlsx`.
-- **Backend**: [Node.js](https://nodejs.org/), [Express](https://expressjs.com/), [tsx](https://github.com/privatenumber/tsx), [esbuild](https://esbuild.github.io/).
+- **Giao diện & Ứng dụng**: [React 19](https://react.dev/), [TypeScript](https://www.typescriptlang.org/), [TailwindCSS v4](https://tailwindcss.com/), [Lucide React](https://lucide.dev/), [Motion](https://motion.dev/).
+- **Xử lý PDF**: [PDF.js (`pdfjs-dist`)](https://mozilla.github.io/pdf.js/) - Bóc tách luồng text số và render ảnh PDF trực tiếp trong Web Worker.
+- **Nhận dạng chữ viết (OCR)**: [Tesseract.js v7](https://tesseract.projectnaptha.com/) - Nhận dạng quang học tiếng Việt (`vie`) và tiếng Anh (`eng`) bằng WebAssembly.
+- **Xuất bảng tính**: [SheetJS (`xlsx`)](https://docs.sheetjs.com/) - Tạo và định dạng file Microsoft Excel `.xlsx` trực tiếp từ bộ nhớ client.
+- **Công cụ đóng gói (Bundler)**: [Vite 6](https://vitejs.dev/).
 
 ---
 
-## 🔒 An Toàn & Quyền Riêng Tư Dữ Liệu Y Tế
+## 🔒 Cam Kết Quyền Riêng Tư & Bảo Mật Y Tế
 
-1. **Xử lý cục bộ**: Tài liệu bệnh án được đọc và phân tích trực tiếp trên trình duyệt máy khách (hoặc máy chủ nội bộ nếu sử dụng API).
-2. **Không phụ thuộc đám mây**: Không truyền dữ liệu người bệnh qua bất kỳ API đám mây bên ngoài nào.
-3. **Chạy được trong mạng cô lập (Air-gapped / Intranet)**: Đã cấu hình worker PDF.js cục bộ và có sẵn file ngôn ngữ `vie.traineddata`/`eng.traineddata` offline.
+1. **Không có máy chủ thu thập dữ liệu**: Ứng dụng không sở hữu bất kỳ backend server nào. Mọi thao tác đều diễn ra trên máy cá nhân của người dùng.
+2. **Không gọi API bên thứ ba**: Không gửi dữ liệu bệnh án qua OpenAI, Google Cloud hay bất kỳ dịch vụ AI bên ngoài nào.
+3. **Tuân thủ quyền riêng tư**: Phù hợp cho việc sử dụng tại các bệnh viện, phòng khám hoặc cá nhân cần bảo mật tuyệt đối thông tin sức khỏe.
 
 ---
 
