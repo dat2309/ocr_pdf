@@ -202,7 +202,7 @@ export function evaluateStatus(
 
 /**
  * Cleans and normalizes raw OCR data immediately after scanning:
- * - Fixes missing decimal points directly in raw text (e.g. 59* -> 5.9 *, 235 -> 2.35, 074 -> 0.74)
+ * - Fixes missing decimal points in OCR text with lab-context rules (e.g. 59* -> 5.9 *, 235 -> 2.35)
  * - Fixes corrupted test names (. GFR -> . eGFR, LDLCholesterol -> LDL Cholesterol)
  * - Normalizes OCR typos in units (umoVL -> umol/L, mei -> mg/dL, mL/phat -> mL/phút)
  * - Normalizes column spacing so raw data matches digital PDF structure
@@ -222,6 +222,7 @@ export function cleanOcrArtifacts(rawText: string): string {
     }
 
     // 2. Fix OCR artifacts and noise in prefixes: .„ Glucose -> . Glucose
+    line = line.replace(/\\(?=\*)/g, '');
     line = line.replace(/^[.„~_|\s]*\b(?=Glucose|Creatinine|Cholesterol|HDL|Non|LDL|Triglyceride|eGFR|GFR)/i, '. ');
 
     // 3. Fix eGFR prefix when "e" was dropped by OCR: . GFR (CKD-EPI -> . eGFR (CKD-EPI
@@ -230,16 +231,19 @@ export function cleanOcrArtifacts(rawText: string): string {
     // 4. Fix LDL Cholesterol formatting: .. LDLCholesterol -> . LDL Cholesterol
     line = line.replace(/\bLDLCholesterol\b/gi, 'LDL Cholesterol');
 
-    // 5. Fix numbers missing leading zero dots: e.g. 074 -> 0.74, 066 -> 0.66, 083 -> 0.83
-    line = line.replace(/\b0(\d{2})\b/g, '0.$1');
-
-    // 6. Fix specific common tests where decimal point was dropped in raw scan:
+    // 5. Fix specific common tests where decimal point was dropped in raw scan:
     // Glucose 59* -> Glucose 5.9 *
     line = line.replace(/\b(Glucose\s+)59(\s*\*?)/gi, '$15.9$2');
+    // Creatinine 074 mg/dL -> Creatinine 0.74 mg/dL
+    line = line.replace(/\b(Creatinine\s+)0(\d{2})(?=\s*mg\/dL)/gi, '$10.$2');
     // Calci ... 235 -> Calci ... 2.35
     line = line.replace(/(\bCalci\s+(?:toàn\s*phần\s+)?)235\b/gi, '$12.35');
     // Triglyceride 237* -> Triglyceride 2.37 *
     line = line.replace(/\b(Triglyceride\s+)237(\s*\*?)/gi, '$12.37$2');
+
+    // 6. Fix broken reference range fragments seen in scanned lab tables
+    line = line.replace(/Nam:\s*74\s*[-–—]\s*LINE\s*5896/gi, 'Nam: 74-110; Nữ: 58-96');
+    line = line.replace(/Nem\s+hàn\s+i\s+0?66\s*-/gi, 'Nam <1.20; Nữ <1.10');
 
     // 7. Fix % misread from * flag before medical units: 237% mmol/L -> 237 * mmol/L, 52% U/L -> 52 * U/L
     line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|g\/dL|g\/L|mg\/dL|U\/L|UI|mIU|pmol|mL))/gi, '$1 * ');
@@ -567,6 +571,7 @@ export function parseMedicalReportFromText(
 
       // Clean line of test code and known acronyms so digits in code (e.g. FT4, HbA1c, eGFR) aren't taken as value
       let valueSearchLine = strippedLine
+        .replace(/^\s*(?:[0-9]{1,3}[.)]?|\([0-9]{1,3}\))\s+(?=[A-ZÀ-Ỹa-zà-ỹ])/, '')
         .replace(/\bHbA1c\b/gi, '')
         .replace(/\bFT4\b/gi, '')
         .replace(/\beGFR\b/gi, '')

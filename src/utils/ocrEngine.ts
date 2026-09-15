@@ -281,12 +281,88 @@ export async function extractTextFromImage(
       user_defined_dpi: '300',
     });
 
-    const result = await worker.recognize(processedSource as any, { rotateAuto: true });
+    const result = await worker.recognize(
+      processedSource as any,
+      { rotateAuto: true },
+      { text: true, tsv: true }
+    );
     onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
-    return result.data.text.trim();
+    return reconstructTextFromTsv(result.data.tsv) || result.data.text.trim();
   } finally {
     await worker.terminate();
   }
+}
+
+function reconstructTextFromTsv(tsv: string | null | undefined): string {
+  if (!tsv) return '';
+
+  type WordBox = {
+    text: string;
+    left: number;
+    top: number;
+    width: number;
+    lineKey: string;
+  };
+
+  const words: WordBox[] = [];
+  const rows = tsv.split(/\r?\n/);
+
+  for (let i = 1; i < rows.length; i++) {
+    const cols = rows[i].split('\t');
+    if (cols.length < 12 || cols[0] !== '5') continue;
+
+    const text = cols.slice(11).join('\t').trim();
+    if (!text) continue;
+
+    const conf = Number(cols[10]);
+    if (Number.isFinite(conf) && conf < 0) continue;
+
+    words.push({
+      text,
+      left: Number(cols[6]) || 0,
+      top: Number(cols[7]) || 0,
+      width: Number(cols[8]) || 0,
+      lineKey: `${cols[1]}:${cols[2]}:${cols[3]}:${cols[4]}`,
+    });
+  }
+
+  if (words.length === 0) return '';
+
+  const lineMap = new Map<string, WordBox[]>();
+  for (const word of words) {
+    const lineWords = lineMap.get(word.lineKey) || [];
+    lineWords.push(word);
+    lineMap.set(word.lineKey, lineWords);
+  }
+
+  const lines = Array.from(lineMap.values())
+    .map((lineWords) => {
+      lineWords.sort((a, b) => a.left - b.left);
+      const top = Math.min(...lineWords.map((word) => word.top));
+      const left = Math.min(...lineWords.map((word) => word.left));
+      const avgCharWidth =
+        lineWords.reduce((sum, word) => sum + word.width / Math.max(word.text.length, 1), 0) /
+        lineWords.length;
+
+      let text = '';
+      let previousRight = 0;
+      for (const word of lineWords) {
+        if (!text) {
+          text = word.text;
+        } else {
+          const gap = Math.max(0, word.left - previousRight);
+          const spaces = gap > avgCharWidth * 1.8 ? Math.min(8, Math.max(2, Math.round(gap / avgCharWidth))) : 1;
+          text += ' '.repeat(spaces) + word.text;
+        }
+        previousRight = word.left + word.width;
+      }
+
+      return { top, left, text: text.trim() };
+    })
+    .filter((line) => line.text.length > 0)
+    .sort((a, b) => (Math.abs(a.top - b.top) > 8 ? a.top - b.top : a.left - b.left));
+
+  return lines.map((line) => line.text).join('\n').trim();
 }
 
 /**
@@ -340,7 +416,7 @@ export async function processMedicalFile(
     unmappedCount: parsedPartial.unmappedCount || 0,
     avgConfidence: parsedPartial.avgConfidence || 90,
     rawSummary: parsedPartial.rawSummary || `Đọc được ${parsedPartial.tests?.length || 0} chỉ số`,
-    rawText: extractedText || parsedPartial.rawText || '',
+    rawText: parsedPartial.rawText || extractedText || '',
     createdAt: new Date().toISOString(),
   };
 
