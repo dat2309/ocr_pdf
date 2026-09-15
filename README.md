@@ -119,11 +119,12 @@ Kết quả mong muốn:
 
 - Đọc file ảnh trực tiếp trong trình duyệt và tạo preview từ chính file upload.
 - Đưa ảnh rời qua cùng bước canvas preprocessing đang dùng cho PDF ảnh:
-  - resize về vùng độ phân giải phù hợp cho OCR; ảnh ngang lớn được đưa về khoảng 1650px rộng để gần với kích thước PDF.js render từ PDF scan,
+  - resize về vùng độ phân giải phù hợp cho OCR; ảnh ngang lớn được đưa về khoảng 1850px rộng để chữ nhỏ và dấu thập phân rõ hơn,
   - với ảnh ngang lớn, đặt ảnh vào canvas trang dọc có lề tương tự PDF render trước khi OCR,
   - chuyển grayscale,
-  - kéo tương phản,
-  - làm nền giấy sáng hơn.
+  - kéo tương phản bằng histogram percentile để tránh nhiễu cực trị,
+  - làm nền giấy sáng hơn,
+  - sharpen nhẹ vùng tài liệu để nét chữ, dấu chấm và ký tự nhỏ rõ hơn.
 - Chạy OCR bằng `vie + eng` để hỗ trợ cả tiếng Việt, tiếng Anh, tên chỉ số, đơn vị và bảng Latin.
 - OCR trên canvas đã chuẩn hóa trong một pass `vie + eng`.
 - Không chạy thêm pass `eng` riêng để tránh tăng thời gian xử lý ảnh rời.

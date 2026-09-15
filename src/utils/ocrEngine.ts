@@ -150,7 +150,7 @@ export async function preprocessImageForOcr(
     const shouldUsePdfLikePage = aspectRatio > 1.1 && origW > 1800;
     let scale = 1.0;
     if (aspectRatio > 1.1 && origW > 1800) {
-      scale = 1650 / origW;
+      scale = 1850 / origW;
     } else if (origW < 1800) {
       scale = Math.min(2.5, 2200 / origW);
     } else if (origW > 3500) {
@@ -189,51 +189,103 @@ export async function preprocessImageForOcr(
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, drawX, drawY, drawW, drawH);
 
-    // Grayscale and mild contrast normalization. Work from the actual document
-    // area instead of the synthetic white margins so standalone images behave
-    // closer to PDF-rendered scan pages without over-amplifying watermark/table
-    // lines into text-like noise.
+    // Grayscale and robust contrast normalization. Work from the actual
+    // document area instead of synthetic margins, and use histogram percentiles
+    // so a few noisy pixels do not dominate the whole image.
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
     const len = data.length;
 
-    let minLum = 255;
-    let maxLum = 0;
     const sampleLeft = Math.max(0, Math.floor(drawX));
     const sampleTop = Math.max(0, Math.floor(drawY));
     const sampleRight = Math.min(canvas.width, Math.ceil(drawX + drawW));
     const sampleBottom = Math.min(canvas.height, Math.ceil(drawY + drawH));
     const sampleStep = 8;
+    const hist = new Uint32Array(256);
+    let sampleCount = 0;
 
     for (let y = sampleTop; y < sampleBottom; y += sampleStep) {
       for (let x = sampleLeft; x < sampleRight; x += sampleStep) {
         const i = (y * canvas.width + x) * 4;
-        const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-        if (lum < minLum) minLum = lum;
-        if (lum > maxLum) maxLum = lum;
+        const lum = Math.round((data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000);
+        hist[Math.max(0, Math.min(255, lum))]++;
+        sampleCount++;
       }
     }
 
-    const range = Math.max(maxLum - minLum, 80);
+    const lowLum = percentileFromHistogram(hist, sampleCount, 0.015);
+    const highLum = percentileFromHistogram(hist, sampleCount, 0.985);
+    const range = Math.max(highLum - lowLum, 70);
+
     for (let i = 0; i < len; i += 4) {
       const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-      let stretched = ((lum - minLum) / range) * 255;
+      let stretched = ((lum - lowLum) / range) * 255;
       stretched = Math.max(0, Math.min(255, stretched));
-      if (stretched > 232) {
+
+      // Clean paper/background while keeping faint glyph strokes and decimal
+      // dots. Mid tones are lifted a bit to suppress watermark noise.
+      if (stretched > 226) {
         stretched = 255;
-      } else if (stretched < 28) {
-        stretched = 0;
+      } else if (stretched < 72) {
+        stretched = Math.max(0, stretched * 0.62);
+      } else if (stretched > 150) {
+        stretched = Math.min(255, stretched * 1.08 + 10);
       }
       data[i] = stretched;
       data[i + 1] = stretched;
       data[i + 2] = stretched;
     }
 
+    sharpenGrayscaleImage(data, canvas.width, canvas.height, sampleLeft, sampleTop, sampleRight, sampleBottom);
     ctx.putImageData(imgData, 0, 0);
     return canvas;
   } catch (err) {
     console.warn('Canvas preprocessing skipped:', err);
     return imageSource;
+  }
+}
+
+function percentileFromHistogram(hist: Uint32Array, count: number, percentile: number): number {
+  if (count <= 0) return percentile <= 0.5 ? 0 : 255;
+
+  const target = Math.max(1, Math.round(count * percentile));
+  let running = 0;
+  for (let i = 0; i < hist.length; i++) {
+    running += hist[i];
+    if (running >= target) return i;
+  }
+  return 255;
+}
+
+function sharpenGrayscaleImage(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number
+) {
+  const source = new Uint8ClampedArray(data);
+  const startX = Math.max(1, left);
+  const startY = Math.max(1, top);
+  const endX = Math.min(width - 1, right);
+  const endY = Math.min(height - 1, bottom);
+
+  for (let y = startY; y < endY; y++) {
+    for (let x = startX; x < endX; x++) {
+      const i = (y * width + x) * 4;
+      const center = source[i];
+      const topLum = source[((y - 1) * width + x) * 4];
+      const bottomLum = source[((y + 1) * width + x) * 4];
+      const leftLum = source[(y * width + x - 1) * 4];
+      const rightLum = source[(y * width + x + 1) * 4];
+      const sharpened = center * 1.85 - (topLum + bottomLum + leftLum + rightLum) * 0.2125;
+      const value = Math.max(0, Math.min(255, sharpened));
+      data[i] = value;
+      data[i + 1] = value;
+      data[i + 2] = value;
+    }
   }
 }
 
