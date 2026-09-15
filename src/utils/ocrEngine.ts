@@ -5,15 +5,10 @@ import { parseMedicalReportFromText } from './medicalParser';
 
 // Configure PDF.js worker locally using Vite asset resolution (offline-first, no CDN dependency)
 if (typeof window !== 'undefined') {
-  try {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.mjs',
-      import.meta.url
-    ).toString();
-  } catch {
-    // Fallback if local URL resolution is not supported
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
-  }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).toString();
 }
 
 export type OcrProgressCallback = (info: { message: string; progress: number }) => void;
