@@ -28,6 +28,12 @@ export interface LabTestItem {
   confidence: number; // 0 - 100
   note?: string;
   isUnmapped?: boolean;
+  rawValue?: string; // Giá trị thô đọc được từ OCR/Text
+  normalizedValue?: string | null; // Giá trị đã chuẩn hóa an toàn nếu có
+  normalizationReason?: string; // Lý do chuẩn hóa
+  needsReview?: boolean; // Cần người dùng kiểm tra lại
+  warning?: string; // Cảnh báo cụ thể (mất dấu thập phân, độ tin cậy thấp, ...)
+  rawLine?: string; // Dòng text gốc chứa chỉ số
 }
 
 export interface LabReport {

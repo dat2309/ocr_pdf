@@ -7,7 +7,7 @@ import { ExcelExportModal } from './components/ExcelExportModal';
 import { SAMPLE_REPORTS } from './data/sampleReports';
 import { LabReport } from './types';
 import { copyTableToClipboard } from './utils/excelExporter';
-import { processMedicalFile } from './utils/ocrEngine';
+import { processMedicalFile, terminateOcrWorker } from './utils/ocrEngine';
 import { parseMedicalReportFromText } from './utils/medicalParser';
 import { Eye, Table } from 'lucide-react';
 
@@ -21,6 +21,15 @@ export default function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<'document' | 'results'>('results');
   const isUploadRunningRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleCancelOcr = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    terminateOcrWorker().catch(() => {});
+  };
 
   const handleUploadFile = async (file: File) => {
     if (isUploadRunningRef.current) return;
@@ -30,19 +39,31 @@ export default function App() {
     setProgressMessage('Đang khởi tạo bộ máy đọc PDF.js & Tesseract OCR...');
     setProgressPercent(5);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      const parsedReport = await processMedicalFile(file, ({ message, progress }) => {
-        setProgressMessage(message);
-        setProgressPercent(progress);
-      });
+      const parsedReport = await processMedicalFile(
+        file,
+        ({ message, progress }) => {
+          setProgressMessage(message);
+          setProgressPercent(progress);
+        },
+        controller.signal
+      );
 
       setReport(parsedReport);
       setIsUploaderOpen(false);
     } catch (localErr: any) {
-      console.error('Lỗi khi bóc tách tài liệu:', localErr);
-      setUploadError(localErr.message || 'Không thể trích xuất dữ liệu từ file xét nghiệm bằng PDF.js & Tesseract.');
+      if (localErr?.name === 'AbortError') {
+        setUploadError('Tác vụ nhận diện đã được hủy theo yêu cầu.');
+      } else {
+        console.error('Lỗi khi bóc tách tài liệu:', localErr);
+        setUploadError(localErr.message || 'Không thể trích xuất dữ liệu từ file xét nghiệm bằng PDF.js & Tesseract.');
+      }
     } finally {
       isUploadRunningRef.current = false;
+      abortControllerRef.current = null;
       setIsAnalyzing(false);
       setProgressPercent(0);
       setProgressMessage('');
@@ -193,6 +214,7 @@ export default function App() {
           setIsUploaderOpen(false);
         }}
         onUploadFile={handleUploadFile}
+        onCancelOcr={handleCancelOcr}
         isAnalyzing={isAnalyzing}
         progressMessage={progressMessage}
         progressPercent={progressPercent}

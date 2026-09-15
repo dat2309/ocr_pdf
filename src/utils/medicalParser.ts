@@ -114,21 +114,35 @@ export function findCatalogMatch(text: string): CatalogMatch | null {
   return null;
 }
 
-export function parseReferenceRange(refStr: string, gender?: string): { min?: number; max?: number } {
+export interface ParsedRefRange {
+  min?: number;
+  max?: number;
+  operator?: '<' | '<=' | '≤' | '>' | '>=' | '≥';
+  isGenderAmbiguous?: boolean;
+}
+
+export function parseReferenceRange(refStr: string, gender?: string): ParsedRefRange {
   if (!refStr) return {};
 
   let clean = refStr.replace(/,/g, '.').trim();
 
   // Handle gender-specific blocks e.g. "Nam: 74 - 114; Nữ: 58 – 96" or "Nam <40 U/L; Nữ <31 U/L"
-  if (gender) {
-    const isFemale = /nữ|female/i.test(gender);
-    const isMale = /nam|male/i.test(gender) && !isFemale;
+  const hasNam = /nam\s*[:.]/i.test(clean);
+  const hasNu = /nữ|female/i.test(clean);
+
+  if (hasNam && hasNu) {
+    const isFemale = gender ? /nữ|female/i.test(gender) : false;
+    const isMale = gender ? (/nam|male/i.test(gender) && !isFemale) : false;
+
     if (isFemale) {
       const femaleMatch = clean.match(/nữ\s*[:.]?\s*([<≤>≥]?\s*[0-9.]+(?:\s*%?\s*[-–—~to]\s*[0-9.]+)?)/i);
       if (femaleMatch) clean = femaleMatch[1];
     } else if (isMale) {
       const maleMatch = clean.match(/nam\s*[:.]?\s*([<≤>≥]?\s*[0-9.]+(?:\s*%?\s*[-–—~to]\s*[0-9.]+)?)/i);
       if (maleMatch) clean = maleMatch[1];
+    } else {
+      // Gender is missing or ambiguous in document -> Do NOT guess!
+      return { isGenderAmbiguous: true };
     }
   }
 
@@ -143,21 +157,45 @@ export function parseReferenceRange(refStr: string, gender?: string): { min?: nu
     };
   }
 
-  // Less than e.g. "< 5.2" or "<= 100"
-  const lessMatch = clean.match(/(?:<=|[<≤])\s*([0-9.]+)/);
-  if (lessMatch) {
-    const max = parseFloat(lessMatch[1]);
-    return { max: isNaN(max) ? undefined : max };
+  // Less than or equal e.g. "<= 100" or "≤ 100"
+  const lessEqMatch = clean.match(/(?:<=|[≤])\s*([0-9.]+)/);
+  if (lessEqMatch) {
+    const max = parseFloat(lessEqMatch[1]);
+    return { max: isNaN(max) ? undefined : max, operator: '<=' };
   }
 
-  // Greater than e.g. "> 90" or ">= 1.03"
-  const greaterMatch = clean.match(/(?:>=|[>≥])\s*([0-9.]+)/);
+  // Less than e.g. "< 5.2"
+  const lessMatch = clean.match(/<\s*([0-9.]+)/);
+  if (lessMatch) {
+    const max = parseFloat(lessMatch[1]);
+    return { max: isNaN(max) ? undefined : max, operator: '<' };
+  }
+
+  // Greater than or equal e.g. ">= 90" or "≥ 90"
+  const greaterEqMatch = clean.match(/(?:>=|[≥])\s*([0-9.]+)/);
+  if (greaterEqMatch) {
+    const min = parseFloat(greaterEqMatch[1]);
+    return { min: isNaN(min) ? undefined : min, operator: '>=' };
+  }
+
+  // Greater than e.g. "> 90"
+  const greaterMatch = clean.match(/>\s*([0-9.]+)/);
   if (greaterMatch) {
     const min = parseFloat(greaterMatch[1]);
-    return { min: isNaN(min) ? undefined : min };
+    return { min: isNaN(min) ? undefined : min, operator: '>' };
   }
 
   return {};
+}
+
+export interface StatusEvaluationResult {
+  status: LabTestStatus;
+  numVal?: number;
+  refMin?: number;
+  refMax?: number;
+  needsReview?: boolean;
+  warning?: string;
+  hasAbnormalMark?: boolean;
 }
 
 export function evaluateStatus(
@@ -165,10 +203,17 @@ export function evaluateStatus(
   refRange: string,
   explicitFlag?: string,
   gender?: string
-): { status: LabTestStatus; numVal?: number; refMin?: number; refMax?: number } {
-  const { min, max } = parseReferenceRange(refRange, gender);
+): StatusEvaluationResult {
+  const rangeInfo = parseReferenceRange(refRange, gender);
   const numVal = parseFloat(valStr.replace(/,/g, '.'));
   let status: LabTestStatus = 'normal';
+  let needsReview = false;
+  let warning: string | undefined;
+
+  if (rangeInfo.isGenderAmbiguous) {
+    needsReview = true;
+    warning = 'Khoảng tham chiếu có phân biệt Nam/Nữ nhưng chưa xác định được giới tính bệnh nhân.';
+  }
 
   if (isNaN(numVal)) {
     // Check text values like Âm tính / Dương tính
@@ -176,28 +221,57 @@ export function evaluateStatus(
       status = 'high';
     } else if (/âm\s*tính|negative/i.test(valStr)) {
       status = 'normal';
+    } else {
+      status = 'normal';
+      needsReview = true;
+      warning = 'Kết quả định tính hoặc định lượng chưa chuẩn hóa được.';
     }
   } else {
-    if (max !== undefined && numVal > max) {
-      status = 'high';
-    } else if (min !== undefined && numVal < min) {
-      status = 'low';
-    } else if (min !== undefined || max !== undefined) {
-      status = 'normal';
+    const { min, max, operator } = rangeInfo;
+    if (operator === '<' && max !== undefined) {
+      status = numVal < max ? 'normal' : 'high';
+    } else if ((operator === '<=' || operator === '≤') && max !== undefined) {
+      status = numVal <= max ? 'normal' : 'high';
+    } else if (operator === '>' && min !== undefined) {
+      status = numVal > min ? 'normal' : 'low';
+    } else if ((operator === '>=' || operator === '≥') && min !== undefined) {
+      status = numVal >= min ? 'normal' : 'low';
+    } else {
+      if (max !== undefined && numVal > max) {
+        status = 'high';
+      } else if (min !== undefined && numVal < min) {
+        status = 'low';
+      } else if (min !== undefined || max !== undefined) {
+        status = 'normal';
+      }
     }
   }
 
-  // Explicit flag takes effect or overrides/augments
-  if (explicitFlag) {
+  // Explicit flag takes effect or augments
+  const hasAbnormalMark = Boolean(explicitFlag && /[*↑↓HL]/i.test(explicitFlag));
+  if (hasAbnormalMark && explicitFlag) {
     const flag = explicitFlag.trim().toUpperCase();
-    if (flag === 'H' || flag === 'HIGH' || flag === '↑' || flag === '*') {
+    if (flag === 'H' || flag === 'HIGH' || flag === '↑') {
       status = 'high';
     } else if (flag === 'L' || flag === 'LOW' || flag === '↓') {
       status = 'low';
+    } else if (flag === '*') {
+      // Retain asterisk significance without forcing abnormal to normal
+      if (status === 'normal') {
+        status = 'abnormal';
+      }
     }
   }
 
-  return { status, numVal: isNaN(numVal) ? undefined : numVal, refMin: min, refMax: max };
+  return {
+    status,
+    numVal: isNaN(numVal) ? undefined : numVal,
+    refMin: rangeInfo.min,
+    refMax: rangeInfo.max,
+    needsReview,
+    warning,
+    hasAbnormalMark,
+  };
 }
 
 /**
@@ -231,16 +305,6 @@ export function cleanOcrArtifacts(rawText: string): string {
     // 4. Fix LDL Cholesterol formatting: .. LDLCholesterol -> . LDL Cholesterol
     line = line.replace(/\bLDLCholesterol\b/gi, 'LDL Cholesterol');
 
-    // 5. Fix specific common tests where decimal point was dropped in raw scan:
-    // Glucose 59* -> Glucose 5.9 *
-    line = line.replace(/\b(Glucose\s+)59(\s*\*?)/gi, '$15.9$2');
-    // Creatinine 074 mg/dL -> Creatinine 0.74 mg/dL
-    line = line.replace(/\b(Creatinine\s+)0(\d{2})(?=\s*mg\/dL)/gi, '$10.$2');
-    // Calci ... 235 -> Calci ... 2.35
-    line = line.replace(/(\bCalci\s+(?:toàn\s*phần\s+)?)235\b/gi, '$12.35');
-    // Triglyceride 237* -> Triglyceride 2.37 *
-    line = line.replace(/\b(Triglyceride\s+)237(\s*\*?)/gi, '$12.37$2');
-
     // 6. Fix common gender-label OCR typos without forcing a specific lab context.
     line = line.replace(/\bNem\s*:/gi, 'Nam:');
 
@@ -248,7 +312,7 @@ export function cleanOcrArtifacts(rawText: string): string {
     line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|g\/dL|g\/L|mg\/dL|U\/L|UI|mIU|pmol|mL))/gi, '$1 * ');
 
     // 8. Fix units typos: umoVL / umot, -> umol/L, mei, -> mg/dL, mL/phat -> mL/phút
-    line = line.replace(/\bumo[tvVlL]+(?:\/L)?\b[,\s|/]*/gi, 'umol/L ');
+    line = line.replace(/\bumo[tvVlL]+(?:\/L)?\b[,\s|/]*/gi, 'µmol/L ');
     line = line.replace(/\bmgd\b/gi, 'mg/dL');
     line = line.replace(/\bmei[,\s|/]+/gi, 'mg/dL ');
     line = line.replace(/\bmL\/ph[au]t\b/gi, 'mL/phút');
@@ -287,69 +351,74 @@ export function cleanOcrArtifacts(rawText: string): string {
 }
 
 /**
- * Mathematically corrects missing decimal points using catalog clinical reference ranges
+ * Checks whether an extracted test value is suspicious (e.g. integer value when clinical
+ * reference range is small decimal, suggesting dropped decimal dot in OCR).
+ *
+ * CRITICAL SAFETY RULE:
+ * Parser NEVER silently modifies numbers without high certainty. It flags suspicious
+ * values with needsReview: true, warning text, and reduced confidence so user can verify.
  */
-export function correctOcrDecimalPoint(
+export interface SuspiciousValueCheck {
+  isSuspicious: boolean;
+  warning?: string;
+  confidence: number;
+}
+
+export function checkSuspiciousValue(
   code: string,
-  val: string,
+  rawVal: string,
+  unit: string,
+  refRange: string,
   refMin?: number,
   refMax?: number
-): string {
-  if (!val || val.includes('.')) return val;
-  const num = parseFloat(val);
-  if (isNaN(num)) return val;
+): SuspiciousValueCheck {
+  if (!rawVal) return { isSuspicious: false, confidence: 95 };
+
+  // If number already contains decimal point or comma, no obvious missing dot
+  if (rawVal.includes('.') || rawVal.includes(',')) {
+    return { isSuspicious: false, confidence: 95 };
+  }
+
+  const num = parseFloat(rawVal);
+  if (isNaN(num)) return { isSuspicious: false, confidence: 90 };
 
   const min = refMin ?? 0;
   const max = refMax ?? 0;
 
-  // Try 100x division first for values >= 100 (e.g. 494 -> 4.94, 237 -> 2.37)
-  if (num >= 100 && num <= 9999) {
-    const div100 = num / 100;
-    if (max > 0) {
-      if (num > max * 5 && div100 >= min * 0.25 && div100 <= (max > 0 ? max * 3.5 : 20)) {
-        return div100.toFixed(2);
-      }
-    } else if (['CHOL', 'TRIG', 'HDL-C', 'LDL-C', 'Ca', 'K', 'HbA1c'].includes(code)) {
-      if (div100 >= 0.5 && div100 <= 25) {
-        return div100.toFixed(2);
-      }
-    }
-  }
-
-  // Try 10x division (e.g. 651 -> 65.1, 59 -> 5.9, 75 -> 7.5)
-  if (num >= 30 && num <= 9999) {
+  // Pattern A: Value is 10x or 100x larger than standard reference range max (when max is small decimal <= 20)
+  // Example: Glucose ref: 3.9 - 6.4, but raw value is 59 -> likely 5.9
+  // Example: Triglyceride ref: 0.46 - 2.2, but raw value is 237 -> likely 2.37
+  if (max > 0 && max <= 20 && num > max * 2.5) {
     const div10 = num / 10;
-    if (max > 0) {
-      if (num > max * 2 && div10 >= min * 0.35 && div10 <= max * 2.5) {
-        return div10.toFixed(1);
-      }
-    } else if (['GLU', 'WBC', 'RBC', 'NEU%', 'LYM%', 'CREA'].includes(code)) {
-      if (div10 >= 1 && div10 <= 150) {
-        return div10.toFixed(1);
-      }
+    const div100 = num / 100;
+
+    if (div10 >= min * 0.3 && div10 <= max * 2.5) {
+      return {
+        isSuspicious: true,
+        warning: `Giá trị "${rawVal}" có thể bị mất dấu thập phân (${div10.toFixed(1)}). Khoảng tham chiếu: ${refRange || `${min} - ${max}`}.`,
+        confidence: 55,
+      };
+    }
+
+    if (div100 >= min * 0.3 && div100 <= max * 2.5) {
+      return {
+        isSuspicious: true,
+        warning: `Giá trị "${rawVal}" có thể bị mất dấu thập phân (${div100.toFixed(2)}). Khoảng tham chiếu: ${refRange || `${min} - ${max}`}.`,
+        confidence: 55,
+      };
     }
   }
 
-  return val;
-}
-
-/**
- * Normalizes reference range string when OCR dropped decimal points
- */
-export function normalizeOcrRefRange(rawRef: string, defaultMin?: number, defaultMax?: number): string {
-  if (!rawRef || defaultMin === undefined || defaultMax === undefined) return rawRef;
-  const match = rawRef.match(/([0-9]+)\s*[-–—~]\s*([0-9]+)/);
-  if (match) {
-    const minNum = parseFloat(match[1]);
-    const maxNum = parseFloat(match[2]);
-    if (Math.abs(minNum / 10 - defaultMin) < 0.2 && Math.abs(maxNum / 10 - defaultMax) < 0.2) {
-      return `${(minNum / 10).toFixed(1)} - ${(maxNum / 10).toFixed(1)}`;
-    }
-    if (Math.abs(minNum / 100 - defaultMin) < 0.2 && Math.abs(maxNum / 100 - defaultMax) < 0.2) {
-      return `${(minNum / 100).toFixed(2)} - ${(maxNum / 100).toFixed(2)}`;
-    }
+  // Pattern B: Creatinine in mg/dL: ref 0.6 - 1.2, but raw is 74 or 074 -> likely 0.74
+  if (code === 'CREA' && /mg\/dL/i.test(unit) && num >= 40 && num <= 250) {
+    return {
+      isSuspicious: true,
+      warning: `Creatinine "${rawVal} mg/dL" có thể bị mất dấu thập phân (${(num / 100).toFixed(2)}). Khoảng tham chiếu: ${refRange || '0.6 - 1.2'}.`,
+      confidence: 55,
+    };
   }
-  return rawRef;
+
+  return { isSuspicious: false, confidence: 95 };
 }
 
 /**
@@ -500,9 +569,6 @@ export function parseMedicalReportFromText(
     const catalogMatch = findCatalogMatch(line);
 
     if (catalogMatch) {
-      // If this test was already processed (e.g. SI mmol/L), skip duplicate secondary line (e.g. . mg/dL)
-      if (processedCodes.has(catalogMatch.code)) continue;
-
       // Handle multi-line table rows where test name is on line i and values are on line i+1
       let currentLine = line;
       if (i + 1 < lines.length) {
@@ -517,7 +583,7 @@ export function parseMedicalReportFromText(
         }
       }
 
-      // Strip procedure numbers, ISO ** marks, formula names, and units tags before extracting flags or values
+      // Strip procedure numbers (e.g. SH/QTKT-xx), ISO ** marks, formula names, and units tags before extracting flags or values
       const strippedLine = currentLine
         .replace(/SH\/QTKT-[0-9*]+/gi, '')
         .replace(/\*{2,}/g, '') // remove ISO ** accreditation marks
@@ -544,7 +610,7 @@ export function parseMedicalReportFromText(
 
       // Reference range from line, previous line, or next line
       let testRefRange = catalogMatch.defaultRefRange;
-      const refMatch = strippedLine.match(/([0-9]+[.,]?[0-9]*\s*%?\s*[-–—~]\s*[0-9]+[.,]?[0-9]*|(?:>=|<=|[<≤>≥])\s*[0-9]+[.,]?[0-9]*|Nam:.*Nữ:.*)/i);
+      const refMatch = strippedLine.match(/([0-9]+[.,]?[0-9]*\s*%?\s*[-–—~to]\s*[0-9]+[.,]?[0-9]*|(?:>=|<=|[<≤>≥])\s*[0-9]+[.,]?[0-9]*|Nam:.*Nữ:.*)/i);
       if (refMatch) {
         testRefRange = refMatch[0].trim();
       } else if (i > 0 && /^[0-9<≤>≥]|Nam:.*Nữ:/.test(lines[i - 1])) {
@@ -554,9 +620,6 @@ export function parseMedicalReportFromText(
         // Or next line
         testRefRange = lines[i + 1].replace(/SH\/QTKT-[0-9*]+/gi, '').replace(/\*{2,}/g, '').trim();
       }
-
-      // Normalize OCR reference range if missing decimal point
-      testRefRange = normalizeOcrRefRange(testRefRange, catalogMatch.defaultRefMin, catalogMatch.defaultRefMax);
 
       // Find unit in line (prioritize multi-character medical units over '%' to avoid OCR '*' -> '%' artifact)
       let testUnit = catalogMatch.defaultUnit;
@@ -568,6 +631,9 @@ export function parseMedicalReportFromText(
           testUnit = '%';
         }
       }
+
+      const primaryUnitKey = `${catalogMatch.code}:${testUnit.toLowerCase()}`;
+      if (processedCodes.has(primaryUnitKey)) continue;
 
       // Clean line of test code and known acronyms so digits in code (e.g. FT4, HbA1c, eGFR) aren't taken as value
       let valueSearchLine = strippedLine
@@ -607,16 +673,22 @@ export function parseMedicalReportFromText(
       }
 
       if (testVal) {
-        // Clinically correct missing decimal points from OCR
-        testVal = correctOcrDecimalPoint(
+        // Check for suspicious missing decimal points WITHOUT modifying the raw number
+        const check = checkSuspiciousValue(
           catalogMatch.code,
           testVal,
+          testUnit,
+          testRefRange,
           catalogMatch.defaultRefMin,
           catalogMatch.defaultRefMax
         );
 
         const evalRes = evaluateStatus(testVal, testRefRange, explicitFlag, patient.gender);
+        processedCodes.add(primaryUnitKey);
         processedCodes.add(catalogMatch.code);
+
+        const needsReview = check.isSuspicious || evalRes.needsReview || check.confidence < 60;
+        const warning = check.warning || evalRes.warning;
 
         tests.push({
           id: `test-${Date.now()}-${tests.length}`,
@@ -624,6 +696,8 @@ export function parseMedicalReportFromText(
           code: catalogMatch.code,
           rawName: catalogMatch.code,
           value: testVal,
+          rawValue: testVal,
+          normalizedValue: null,
           numericValue: evalRes.numVal ?? null,
           unit: testUnit,
           referenceRange: testRefRange,
@@ -631,9 +705,60 @@ export function parseMedicalReportFromText(
           refMax: evalRes.refMax ?? catalogMatch.defaultRefMax ?? null,
           status: evalRes.status,
           matchedCategory: catalogMatch.category,
-          confidence: 95,
+          confidence: Math.min(check.confidence, evalRes.needsReview ? 65 : 95),
           isUnmapped: false,
+          needsReview,
+          warning,
+          rawLine: line,
         });
+
+        // Check if next line is a secondary unit row (e.g. Glucose 106 mg/dL, Creatinine 0.74 mg/dL, Triglyceride 210 mg/dL)
+        if (i + 1 < lines.length) {
+          const nextRow = lines[i + 1];
+          const nextHasCat = findCatalogMatch(nextRow);
+          if (!nextHasCat) {
+            const secRowMatch = nextRow.match(/^[.„~_|\s]*([0-9]+(?:[.,][0-9]+)?)\s*([*↑↓HL]?)\s+(10\^[0-9]+\/L|G\/L|T\/L|g\/dL|g\/L|mmol\/L|µmol\/L|umol\/L|mg\/dL|U\/L|UI\/mL|mIU\/L|pmol\/L|fL|pg|mL\/(?:phút|min)|Leu\/µL)\s*([0-9<≤>≥].*)?$/i);
+            if (secRowMatch && secRowMatch[3] !== testUnit) {
+              const secVal = secRowMatch[1];
+              const secFlag = secRowMatch[2] || explicitFlag;
+              const secUnit = secRowMatch[3];
+              const secRef = (secRowMatch[4] || '').trim();
+              const secondaryUnitKey = `${catalogMatch.code}:${secUnit.toLowerCase()}`;
+
+              if (processedCodes.has(secondaryUnitKey)) {
+                continue;
+              }
+
+              const secEval = evaluateStatus(secVal, secRef, secFlag, patient.gender);
+              const secCheck = checkSuspiciousValue(catalogMatch.code, secVal, secUnit, secRef);
+              processedCodes.add(secondaryUnitKey);
+
+              tests.push({
+                id: `test-${Date.now()}-${tests.length}`,
+                name: `${catalogMatch.name} (${secUnit})`,
+                code: catalogMatch.code,
+                rawName: `${catalogMatch.code} (${secUnit})`,
+                value: secVal,
+                rawValue: secVal,
+                normalizedValue: null,
+                numericValue: secEval.numVal ?? null,
+                unit: secUnit,
+                referenceRange: secRef,
+                refMin: secEval.refMin ?? null,
+                refMax: secEval.refMax ?? null,
+                status: secEval.status,
+                matchedCategory: catalogMatch.category,
+                confidence: Math.min(secCheck.confidence, secEval.needsReview ? 65 : 92),
+                isUnmapped: false,
+                needsReview: secCheck.isSuspicious || secEval.needsReview,
+                warning: secCheck.warning || secEval.warning,
+                rawLine: nextRow,
+              });
+
+              i++; // Consumed secondary row
+            }
+          }
+        }
       }
     } else {
       // Unmapped line detection: line has index/code/name, a numeric value, a unit or range
@@ -646,7 +771,7 @@ export function parseMedicalReportFromText(
         const rawRef = (genericTestLineMatch[5] || '').trim();
 
         if (rawName && rawVal && rawName.length <= 20 && !processedCodes.has(rawName)) {
-          const evalRes = evaluateStatus(rawVal, rawRef);
+          const evalRes = evaluateStatus(rawVal, rawRef, '', patient.gender);
           processedCodes.add(rawName);
 
           tests.push({
@@ -655,6 +780,8 @@ export function parseMedicalReportFromText(
             code: rawName,
             rawName: rawName,
             value: rawVal,
+            rawValue: rawVal,
+            normalizedValue: null,
             numericValue: evalRes.numVal ?? null,
             unit: rawUnit || '',
             referenceRange: rawRef || '',
@@ -662,8 +789,11 @@ export function parseMedicalReportFromText(
             refMax: evalRes.refMax ?? null,
             status: evalRes.status,
             matchedCategory: 'Khác',
-            confidence: 82,
+            confidence: 80,
             isUnmapped: true, // Marked as unmapped for user review in UI dropdown
+            needsReview: true,
+            warning: 'Chỉ số chưa khớp danh mục chuẩn, vui lòng kiểm tra lại.',
+            rawLine: line,
           });
         }
       }

@@ -17,6 +17,7 @@ interface FileUploaderModalProps {
   onClose: () => void;
   onSelectSample: (sample: LabReport) => void;
   onUploadFile: (file: File) => Promise<void>;
+  onCancelOcr?: () => void;
   isAnalyzing: boolean;
   progressMessage?: string;
   progressPercent?: number;
@@ -28,6 +29,7 @@ export const FileUploaderModal: React.FC<FileUploaderModalProps> = ({
   onClose,
   onSelectSample,
   onUploadFile,
+  onCancelOcr,
   isAnalyzing,
   progressMessage,
   progressPercent,
@@ -138,6 +140,19 @@ export const FileUploaderModal: React.FC<FileUploaderModalProps> = ({
                 </div>
                 {progressPercent !== undefined && (
                   <p className="text-[11px] font-medium text-teal-700">{progressPercent}%</p>
+                )}
+                {onCancelOcr && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCancelOcr();
+                    }}
+                    className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Hủy nhận diện</span>
+                  </button>
                 )}
               </div>
             ) : (

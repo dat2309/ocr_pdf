@@ -515,20 +515,31 @@ export const LabResultsTable: React.FC<LabResultsTableProps> = ({
                           value={test.value}
                           onChange={(e) => handleUpdateTestItem(test.id, { value: e.target.value })}
                           className={`w-full px-3 py-1.5 rounded-md font-semibold text-xs border text-center transition-all outline-hidden ${
-                            isAbnormal
+                            test.needsReview
+                              ? 'bg-amber-50/70 border-amber-400 text-amber-950 focus:ring-1 focus:ring-amber-500'
+                              : isAbnormal
                               ? 'bg-amber-50/50 border-amber-300 text-amber-900 focus:ring-1 focus:ring-amber-500'
                               : 'bg-white border-slate-200 text-slate-900 focus:ring-1 focus:ring-teal-500'
                           }`}
                         />
-                        {isAbnormal && (
+                        {(isAbnormal || test.needsReview) && (
                           <span
-                            title="Chỉ số ngoài ngưỡng tham chiếu"
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-amber-500"
+                            title={test.warning || (isAbnormal ? 'Chỉ số ngoài ngưỡng tham chiếu' : 'Cần kiểm tra lại')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-amber-600"
                           >
                             <AlertTriangle className="w-3.5 h-3.5" />
                           </span>
                         )}
                       </div>
+                      {test.needsReview && test.warning && (
+                        <div
+                          className="mt-1 text-[10px] text-amber-700 bg-amber-50/80 rounded px-1.5 py-0.5 border border-amber-200 flex items-center gap-1 max-w-[170px]"
+                          title={test.warning}
+                        >
+                          <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-amber-600" />
+                          <span className="truncate">{test.warning}</span>
+                        </div>
+                      )}
                     </td>
 
                     {/* ĐƠN VỊ Column */}

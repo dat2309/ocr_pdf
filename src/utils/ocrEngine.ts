@@ -15,20 +15,378 @@ export type OcrProgressCallback = (info: { message: string; progress: number }) 
 
 type OcrWorker = Awaited<ReturnType<typeof createWorker>>;
 
+/**
+ * Global system limits for safety and memory protection
+ */
+export const FILE_LIMITS = {
+  maxFileSize: 30 * 1024 * 1024, // 30 MB
+  maxPdfPages: 30, // 30 pages
+  maxCanvasDimension: 4096, // 4096 px width or height
+  maxCanvasPixels: 10_000_000, // 10 Megapixels
+};
+
+export const DEFAULT_OCR_CONFIG = {
+  psm: PSM.AUTO,
+  preserveInterwordSpaces: '1',
+  userDefinedDpi: '300', // Metadata only for Tesseract
+  languages: ['vie', 'eng'] as const,
+};
+
+export interface PdfQualityConfig {
+  minMeaningfulChars: number;
+  minLinesWithContent: number;
+  minAlphanumericRatio: number;
+  maxCorruptedCharRatio: number;
+  minScoreToPass: number;
+}
+
+export const DEFAULT_PDF_QUALITY_CONFIG: PdfQualityConfig = {
+  minMeaningfulChars: 35,
+  minLinesWithContent: 3,
+  minAlphanumericRatio: 0.55,
+  maxCorruptedCharRatio: 0.04,
+  minScoreToPass: 60,
+};
+
+export interface PdfTextQualityResult {
+  usable: boolean;
+  score: number;
+  reasons: string[];
+  metrics: {
+    meaningfulChars: number;
+    linesCount: number;
+    alphanumericRatio: number;
+    corruptedCharsCount: number;
+    hasMedicalKeywords: boolean;
+    hasUnits: boolean;
+    hasNumericValues: boolean;
+    isWatermarkOnly: boolean;
+    hasAbnormalRepetition: boolean;
+  };
+}
+
 let ocrQueue: Promise<void> = Promise.resolve();
 let localOcrWorkerPromise: Promise<OcrWorker> | null = null;
 let activeOcrProgress: OcrProgressCallback | undefined;
 
+function createAbortError(message: string): DOMException {
+  return new DOMException(message, 'AbortError');
+}
+
 /**
- * Extract text from a PDF file using PDF.js.
- * If pages are digital, extracts structured text directly.
- * If pages are scanned images (text is empty), renders page to canvas and runs Tesseract OCR.
+ * Reconstructs lines of text from PDF.js textContent items by grouping
+ * bounding boxes with adaptive vertical line clustering and proper horizontal spacing.
+ */
+export function reconstructPdfPageText(items: any[]): string {
+  if (!items || items.length === 0) return '';
+
+  interface TextPiece {
+    str: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  const pieces: TextPiece[] = [];
+
+  for (const item of items) {
+    if (!item.str || typeof item.str !== 'string') continue;
+    const str = item.str;
+    if (!str.trim()) continue;
+
+    const transform = item.transform || [1, 0, 0, 1, 0, 0];
+    const x = Number(transform[4]) || 0;
+    const y = Number(transform[5]) || 0;
+    const height = Math.max(8, Math.abs(Number(transform[3]) || Number(transform[0]) || Number(item.height) || 10));
+    const width = Number(item.width) || Math.max(1, str.length * (height * 0.55));
+
+    pieces.push({ str, x, y, width, height });
+  }
+
+  if (pieces.length === 0) return '';
+
+  // Sort pieces vertically descending first (PDF Y coordinate: higher Y is higher on page)
+  pieces.sort((a, b) => b.y - a.y);
+
+  // Group into lines using adaptive line tolerance
+  interface LineGroup {
+    avgY: number;
+    height: number;
+    pieces: TextPiece[];
+  }
+
+  const lines: LineGroup[] = [];
+
+  for (const piece of pieces) {
+    let matchedLine: LineGroup | null = null;
+
+    for (const line of lines) {
+      const lineTolerance = Math.max(piece.height, line.height) * 0.55;
+      if (Math.abs(line.avgY - piece.y) <= lineTolerance) {
+        matchedLine = line;
+        break;
+      }
+    }
+
+    if (matchedLine) {
+      matchedLine.pieces.push(piece);
+      matchedLine.avgY = (matchedLine.avgY * (matchedLine.pieces.length - 1) + piece.y) / matchedLine.pieces.length;
+      matchedLine.height = Math.max(matchedLine.height, piece.height);
+    } else {
+      lines.push({
+        avgY: piece.y,
+        height: piece.height,
+        pieces: [piece],
+      });
+    }
+  }
+
+  // Sort lines from top (highest Y) to bottom (lowest Y)
+  lines.sort((a, b) => b.avgY - a.avgY);
+
+  const resultLines: string[] = [];
+
+  for (const line of lines) {
+    // Sort pieces in line horizontally (left to right)
+    line.pieces.sort((a, b) => a.x - b.x);
+
+    let lineText = '';
+    let previousRight = 0;
+    const avgCharWidth = line.height * 0.55;
+
+    for (let i = 0; i < line.pieces.length; i++) {
+      const piece = line.pieces[i];
+      if (i === 0) {
+        lineText = piece.str;
+      } else {
+        const gap = piece.x - previousRight;
+        if (gap > avgCharWidth * 1.8) {
+          const spaces = Math.min(8, Math.max(2, Math.round(gap / Math.max(avgCharWidth, 4))));
+          lineText += ' '.repeat(spaces) + piece.str;
+        } else if (gap > avgCharWidth * 0.35) {
+          lineText += ' ' + piece.str;
+        } else {
+          lineText += piece.str;
+        }
+      }
+      previousRight = Math.max(previousRight, piece.x + piece.width);
+    }
+
+    if (lineText.trim()) {
+      resultLines.push(lineText.trimEnd());
+    }
+  }
+
+  return resultLines.join('\n');
+}
+
+/**
+ * Evaluates the quality and reliability of a PDF page's text layer.
+ * Decides whether the page has good digital text or must be rendered to canvas for OCR.
+ */
+export function evaluatePdfTextQuality(
+  textItems: any[],
+  reconstructedText: string,
+  customConfig?: Partial<PdfQualityConfig>
+): PdfTextQualityResult {
+  const config: PdfQualityConfig = { ...DEFAULT_PDF_QUALITY_CONFIG, ...customConfig };
+  const reasons: string[] = [];
+  const text = (reconstructedText || '').trim();
+
+  // 1. Alphanumeric meaningful chars
+  const alphanumericMatches = text.match(/[a-zA-Z0-9\u00C0-\u024F\u1EA0-\u1EF9]/g) || [];
+  const meaningfulChars = alphanumericMatches.length;
+
+  // 2. Lines with content
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const linesCount = lines.length;
+
+  // 3. Valid ratio
+  const nonSpaceChars = text.replace(/\s+/g, '').length;
+  const alphanumericRatio = nonSpaceChars > 0 ? meaningfulChars / nonSpaceChars : 0;
+
+  // 4. Corrupted characters (replacement character, control characters, or cid sequences)
+  const replacementMatches = text.match(/\uFFFD/g) || [];
+  const cidMatches = text.match(/\(cid:\d+\)/gi) || [];
+  const controlMatches = text.match(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g) || [];
+  const corruptedCharsCount = replacementMatches.length + cidMatches.length + controlMatches.length;
+
+  // 5. Medical keywords
+  const medicalKeywordsRegex = /(?:xét\s*nghiệm|kết\s*quả|bệnh\s*nhân|họ\s*(?:và\s*)?tên|bác\s*sĩ|phòng\s*khám|bệnh\s*viện|huyết\s*học|sinh\s*hóa|nước\s*tiểu|glucose|creatinine|cholesterol|triglyceride|ast|alt|ggt|wbc|rbc|hgb|plt|egfr|acid\s*uric|ure|tham\s*chiếu|đơn\s*vị|chỉ\s*số|laboratory|test|patient)/i;
+  const hasMedicalKeywords = medicalKeywordsRegex.test(text);
+
+  // 6. Common medical units
+  const unitsRegex = /(?:mmol\/L|µmol\/L|umol\/L|mg\/dL|g\/dL|g\/L|U\/L|UI\/mL|mIU\/L|pmol\/L|10\^[0-9]+\/L|G\/L|T\/L|fL|pg|mL\/(?:phút|min)|Leu\/µL|%)/i;
+  const hasUnits = unitsRegex.test(text);
+
+  // 7. Numeric lab values
+  const hasNumericValues = /(?:^|\s)[0-9]+(?:[.,][0-9]+)?(?:\s|\*|$)/m.test(text);
+
+  // 8. Watermark/Footer only detection
+  const isWatermarkOnly = checkIfWatermarkOnly(lines, text);
+
+  // 9. Abnormal repetition detection (e.g. repeated character bomb or broken font output)
+  const hasAbnormalRepetition = checkAbnormalRepetition(text, nonSpaceChars);
+
+  // Scoring
+  let score = 0;
+
+  if (meaningfulChars >= config.minMeaningfulChars) {
+    score += 40;
+  } else {
+    reasons.push(`Nội dung văn bản quá ít (${meaningfulChars} ký tự có nghĩa, tối thiểu ${config.minMeaningfulChars})`);
+  }
+
+  if (linesCount >= config.minLinesWithContent) {
+    score += 15;
+  } else {
+    reasons.push(`Số dòng văn bản quá ít (${linesCount} dòng, tối thiểu ${config.minLinesWithContent})`);
+  }
+
+  if (alphanumericRatio >= config.minAlphanumericRatio) {
+    score += 15;
+  } else {
+    reasons.push(`Tỷ lệ ký tự hợp lệ thấp (${Math.round(alphanumericRatio * 100)}%, yêu cầu >= ${Math.round(config.minAlphanumericRatio * 100)}%)`);
+  }
+
+  if (hasMedicalKeywords) {
+    score += 15;
+  } else {
+    reasons.push('Không tìm thấy từ khóa hoặc chỉ số xét nghiệm y tế');
+  }
+
+  if (hasUnits) {
+    score += 10;
+  }
+
+  if (hasNumericValues) {
+    score += 5;
+  }
+
+  if (corruptedCharsCount > 2 || (meaningfulChars > 0 && corruptedCharsCount / meaningfulChars > config.maxCorruptedCharRatio)) {
+    score = Math.max(0, score - 50);
+    reasons.push(`Phát hiện ${corruptedCharsCount} ký tự lỗi encoding (hoặc ký tự thay thế \\uFFFD / cid)`);
+  }
+
+  if (isWatermarkOnly) {
+    score = 0;
+    reasons.push('Văn bản chỉ chứa watermark, tiêu đề hoặc thông tin trang; nội dung bảng là ảnh scan');
+  }
+
+  if (hasAbnormalRepetition) {
+    score = Math.max(0, score - 40);
+    reasons.push('Phát hiện chuỗi lặp bất thường (lỗi font/vector encoding)');
+  }
+
+  const usable = score >= config.minScoreToPass && !isWatermarkOnly && corruptedCharsCount <= 2;
+
+  if (usable) {
+    reasons.unshift(`Text layer hợp lệ (Độ tin cậy: ${score}/100)`);
+  } else if (reasons.length === 0) {
+    reasons.push(`Điểm chất lượng text chưa đạt ngưỡng (${score}/${config.minScoreToPass})`);
+  }
+
+  return {
+    usable,
+    score,
+    reasons,
+    metrics: {
+      meaningfulChars,
+      linesCount,
+      alphanumericRatio,
+      corruptedCharsCount,
+      hasMedicalKeywords,
+      hasUnits,
+      hasNumericValues,
+      isWatermarkOnly,
+      hasAbnormalRepetition,
+    },
+  };
+}
+
+function checkIfWatermarkOnly(lines: string[], fullText: string): boolean {
+  if (lines.length === 0) return true;
+  if (lines.length > 8) return false;
+
+  const watermarkPhrases = [
+    /^(?:test\s*pdf|draft|confidential|bản\s*nháp|mẫu\s*thử|watermark)$/i,
+    /^(?:trang|page)\s*[0-9]+(?:\s*\/\s*[0-9]+)?$/i,
+    /^(?:bệnh\s*viện|phòng\s*khám)[^0-9]*$/i,
+  ];
+
+  let matchesWatermarkCount = 0;
+  for (const line of lines) {
+    const cleanLine = line.trim();
+    if (watermarkPhrases.some((p) => p.test(cleanLine))) {
+      matchesWatermarkCount++;
+    }
+  }
+
+  // If every single line matches a watermark/header pattern, and no numbers/units appear
+  const hasNumbers = /[0-9]{1,4}(?:[.,][0-9]+)?/.test(fullText);
+  const hasUnits = /(?:mmol|µmol|umol|mg|U\/L|g\/dL)/i.test(fullText);
+
+  if (matchesWatermarkCount >= lines.length && (!hasNumbers || !hasUnits)) {
+    return true;
+  }
+
+  return false;
+}
+
+function checkAbnormalRepetition(text: string, totalNonSpace: number): boolean {
+  if (totalNonSpace < 30) return false;
+
+  // Check if same single character makes up > 40% of text
+  const charFreq: Record<string, number> = {};
+  for (const ch of text) {
+    if (/\s/.test(ch)) continue;
+    charFreq[ch] = (charFreq[ch] || 0) + 1;
+    if (charFreq[ch] / totalNonSpace > 0.4) {
+      return true;
+    }
+  }
+
+  // Check for repeated short token sequence e.g. "abc abc abc abc abc"
+  const tokens = text.split(/\s+/).filter(Boolean);
+  let maxConsecutive = 1;
+  let currentConsecutive = 1;
+  for (let i = 1; i < tokens.length; i++) {
+    if (tokens[i] === tokens[i - 1]) {
+      currentConsecutive++;
+      if (currentConsecutive > maxConsecutive) maxConsecutive = currentConsecutive;
+    } else {
+      currentConsecutive = 1;
+    }
+  }
+
+  return maxConsecutive > 12;
+}
+
+/**
+ * Extract text from a PDF file using PDF.js page-by-page.
+ *
+ * Requirements:
+ * 1. Evaluate text layer per-page using evaluatePdfTextQuality.
+ * 2. If usable, use original digital text (no OCR).
+ * 3. If not usable (scanned or corrupted), render ONLY that page to canvas and run Tesseract OCR.
+ * 4. Join pages in exact page order.
+ * 5. Limit canvas resolution and memory; free canvas after each page.
  */
 export async function extractTextFromPdf(
   fileOrBuffer: File | ArrayBuffer | Uint8Array,
-  onProgress?: OcrProgressCallback
-): Promise<{ text: string; pageDataUrls: string[] }> {
-  onProgress?.({ message: 'Đang nạp tài liệu PDF với PDF.js...', progress: 10 });
+  onProgress?: OcrProgressCallback,
+  abortSignal?: AbortSignal
+): Promise<{
+  text: string;
+  pageDataUrls: string[];
+  pageDecisions: Array<{ page: number; method: 'digital' | 'ocr'; score: number; reasons: string[] }>;
+}> {
+  if (abortSignal?.aborted) {
+    throw new DOMException('Tác vụ đọc PDF đã bị hủy.', 'AbortError');
+  }
+
+  onProgress?.({ message: 'Đang mở tài liệu PDF với PDF.js...', progress: 5 });
 
   let dataArray: Uint8Array;
   if (fileOrBuffer instanceof Uint8Array) {
@@ -36,6 +394,9 @@ export async function extractTextFromPdf(
   } else if (fileOrBuffer instanceof ArrayBuffer) {
     dataArray = new Uint8Array(fileOrBuffer);
   } else {
+    if (fileOrBuffer.size > FILE_LIMITS.maxFileSize) {
+      throw new Error(`Kích thước file PDF vượt quá giới hạn cho phép (tối đa 30MB).`);
+    }
     const ab = await fileOrBuffer.arrayBuffer();
     dataArray = new Uint8Array(ab);
   }
@@ -44,95 +405,165 @@ export async function extractTextFromPdf(
   const pdfDoc = await loadingTask.promise;
   const numPages = pdfDoc.numPages;
 
+  if (numPages > FILE_LIMITS.maxPdfPages) {
+    throw new Error(`Số trang PDF (${numPages}) vượt quá giới hạn cho phép (tối đa ${FILE_LIMITS.maxPdfPages} trang).`);
+  }
+
   let fullExtractedText = '';
   const pageDataUrls: string[] = [];
+  const pageDecisions: Array<{ page: number; method: 'digital' | 'ocr'; score: number; reasons: string[] }> = [];
 
   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    if (abortSignal?.aborted) {
+      throw new DOMException('Tác vụ đọc PDF đã bị hủy.', 'AbortError');
+    }
+
+    const pageProgressBase = 10 + Math.round(((pageNum - 1) / numPages) * 80);
     onProgress?.({
-      message: `PDF.js đang đọc trang ${pageNum}/${numPages}...`,
-      progress: 20 + Math.round((pageNum / numPages) * 35),
+      message: `Đang phân tích trang ${pageNum}/${numPages}...`,
+      progress: pageProgressBase,
     });
 
     const page = await pdfDoc.getPage(pageNum);
-    const unscaledViewport = page.getViewport({ scale: 1.0 });
-    // Dynamic scale to achieve optimal OCR resolution (~2000-2400px width)
-    const optimalScale = Math.max(2.0, Math.min(3.5, 2200 / unscaledViewport.width));
-    const viewport = page.getViewport({ scale: optimalScale });
-
-    // Try extracting digital text
     const textContent = await page.getTextContent();
-    let pageText = '';
+    const reconstructedText = reconstructPdfPageText(textContent.items);
+    const quality = evaluatePdfTextQuality(textContent.items, reconstructedText);
 
-    if (textContent.items && textContent.items.length > 0) {
-      // Group items by vertical position (Y coordinate) to reconstruct lines accurately
-      const lineMap = new Map<number, Array<{ x: number; str: string }>>();
+    let finalPageText = '';
 
-      for (const item of textContent.items as any[]) {
-        if (!item.str || item.str.trim() === '') continue;
-        const transform = item.transform; // [scaleX, skewY, skewX, scaleY, x, y]
-        const y = Math.round(transform[5] / 4) * 4; // snap to ~4px bucket
-        const x = transform[4];
+    if (quality.usable) {
+      // High-quality digital text layer: use original text directly
+      pageDecisions.push({
+        page: pageNum,
+        method: 'digital',
+        score: quality.score,
+        reasons: quality.reasons,
+      });
+      finalPageText = reconstructedText;
 
-        if (!lineMap.has(y)) {
-          lineMap.set(y, []);
-        }
-        lineMap.get(y)!.push({ x, str: item.str });
-      }
+      onProgress?.({
+        message: `Trang ${pageNum}/${numPages}: Đọc text layer điện tử thành công`,
+        progress: pageProgressBase + Math.round((1 / numPages) * 40),
+      });
 
-      // Sort lines from top (highest Y) to bottom (lowest Y)
-      const sortedYs = Array.from(lineMap.keys()).sort((a, b) => b - a);
-      for (const y of sortedYs) {
-        const lineItems = lineMap.get(y)!;
-        lineItems.sort((a, b) => a.x - b.x);
-        const lineStr = lineItems.map((it) => it.str).join('  ');
-        pageText += lineStr + '\n';
-      }
-    }
-
-    // Only fall back to OCR when PDF text is truly sparse. Some valid reports use
-    // uncommon Vietnamese labels, so a keyword check can accidentally replace good
-    // embedded text with lower-quality OCR output.
-    const hasUsableDigitalText = pageText.replace(/\s+/g, '').length >= 120;
-
-    // Render page to canvas for preview & scanned fallback
-    if (typeof document !== 'undefined') {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        const canvasContext = canvas.getContext('2d');
-
-        if (canvasContext) {
-          await page.render({ canvasContext, viewport, canvas } as any).promise;
-          const pageDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      // For page 1, create a lightweight preview for DocumentViewer if not yet set
+      if (pageNum === 1 && typeof document !== 'undefined') {
+        try {
+          const previewCanvas = await renderPdfPageToCanvas(page, 1.2, 1200);
+          const pageDataUrl = previewCanvas.toDataURL('image/jpeg', 0.85);
           pageDataUrls.push(pageDataUrl);
+          disposeCanvas(previewCanvas);
+        } catch (e) {
+          console.warn('Could not generate preview for digital page 1:', e);
+        }
+      }
+    } else {
+      // Scanned or low-quality text layer: render page to canvas and OCR
+      pageDecisions.push({
+        page: pageNum,
+        method: 'ocr',
+        score: quality.score,
+        reasons: quality.reasons,
+      });
 
-          // If digital text is almost empty, treat the page as a scanned PDF.
-          if (!hasUsableDigitalText) {
-            onProgress?.({
-              message: `Trang ${pageNum} là ảnh scan, đang chạy Tesseract OCR tối ưu hóa...`,
-              progress: 60,
-            });
-            const ocrResult = await extractTextFromImage(canvas, onProgress);
-            pageText = ocrResult;
+      onProgress?.({
+        message: `Trang ${pageNum}/${numPages}: Text layer không đạt (${quality.reasons[0] || 'Ảnh scan'}), đang chạy OCR Tesseract...`,
+        progress: pageProgressBase + 10,
+      });
+
+      if (typeof document !== 'undefined') {
+        let scanCanvas: HTMLCanvasElement | null = null;
+        try {
+          // Render page to canvas with optimal scale (~2200px width for clear OCR)
+          scanCanvas = await renderPdfPageToCanvas(page, 2.8, 2600);
+
+          if (pageNum === 1) {
+            const pageDataUrl = scanCanvas.toDataURL('image/jpeg', 0.85);
+            pageDataUrls.push(pageDataUrl);
+          }
+
+          const ocrResult = await extractTextFromImage(scanCanvas, onProgress, abortSignal);
+          finalPageText = ocrResult;
+        } finally {
+          if (scanCanvas) {
+            disposeCanvas(scanCanvas);
+            scanCanvas = null;
           }
         }
-      } catch (renderErr) {
-        console.warn('Could not render PDF page to canvas:', renderErr);
+      } else {
+        finalPageText = reconstructedText;
       }
     }
 
-    fullExtractedText += pageText + '\n';
+    fullExtractedText += (fullExtractedText ? '\n\n' : '') + finalPageText;
   }
 
-  onProgress?.({ message: 'Hoàn thành đọc tài liệu PDF.js', progress: 100 });
-  return { text: fullExtractedText, pageDataUrls };
+  onProgress?.({ message: 'Hoàn thành đọc tài liệu PDF', progress: 95 });
+  return { text: fullExtractedText, pageDataUrls, pageDecisions };
 }
 
 /**
- * Preprocesses an image via offscreen HTML5 Canvas:
- * 1. Upscaling if width < 1800px to ensure decimal dots and small fonts are clearly resolved.
- * 2. Grayscale conversion and dynamic contrast stretching to make text dark and paper background clean white.
+ * Renders a PDF page to an offscreen HTML5 Canvas with bounded dimensions
+ */
+async function renderPdfPageToCanvas(
+  page: pdfjsLib.PDFPageProxy,
+  desiredScale: number,
+  targetMaxWidth: number
+): Promise<HTMLCanvasElement> {
+  const unscaledViewport = page.getViewport({ scale: 1.0 });
+
+  let scale = Math.max(1.0, Math.min(3.5, targetMaxWidth / Math.max(unscaledViewport.width, 1)));
+  if (desiredScale > 0) {
+    scale = Math.min(scale, desiredScale);
+  }
+
+  // Safety caps: max dimensions and max area
+  if (unscaledViewport.width * scale > FILE_LIMITS.maxCanvasDimension) {
+    scale = FILE_LIMITS.maxCanvasDimension / unscaledViewport.width;
+  }
+  if (unscaledViewport.height * scale > FILE_LIMITS.maxCanvasDimension) {
+    scale = FILE_LIMITS.maxCanvasDimension / unscaledViewport.height;
+  }
+  if (unscaledViewport.width * scale * unscaledViewport.height * scale > FILE_LIMITS.maxCanvasPixels) {
+    scale = Math.sqrt((FILE_LIMITS.maxCanvasPixels * 0.98) / (unscaledViewport.width * unscaledViewport.height));
+  }
+
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+
+  const canvasContext = canvas.getContext('2d', { willReadFrequently: true });
+  if (!canvasContext) {
+    throw new Error('Không thể tạo 2D context cho canvas render PDF.');
+  }
+
+  await page.render({ canvasContext, viewport, canvas } as any).promise;
+  return canvas;
+}
+
+/**
+ * Releases canvas memory immediately to prevent browser tab OOM crashes
+ */
+export function disposeCanvas(canvas: HTMLCanvasElement): void {
+  try {
+    canvas.width = 0;
+    canvas.height = 0;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, 0, 0);
+    }
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
+/**
+ * Preprocesses standalone images (JPG, PNG, WebP) or PDF scan canvases:
+ * 1. Preserves natural aspect ratio without forcing wide images into portrait pages.
+ * 2. Resizes based on text resolution needs (upscaling small images, capping huge images).
+ * 3. Controlled grayscale, contrast normalization, paper whitening (preserving decimal dots and Vietnamese marks).
+ * 4. Gentle unsharp sharpening without noise blowout.
  */
 export async function preprocessImageForOcr(
   imageSource: string | HTMLCanvasElement | HTMLImageElement | File | Blob
@@ -144,41 +575,41 @@ export async function preprocessImageForOcr(
     const origW = img.naturalWidth || img.width;
     const origH = img.naturalHeight || img.height;
 
-    // Keep OCR input close to PDF.js rendered scan pages. Very large landscape
-    // photos can make dots, table lines, and watermark edges compete with text.
-    const aspectRatio = origW / Math.max(origH, 1);
-    const shouldUsePdfLikePage = aspectRatio > 1.1 && origW > 1800;
+    if (!origW || !origH) return imageSource;
+
+    // Keep natural aspect ratio! NEVER force wide images into portrait frames.
     let scale = 1.0;
-    if (aspectRatio > 1.1 && origW > 1800) {
-      scale = 1850 / origW;
-    } else if (origW < 1800) {
+    if (origW < 1600) {
       scale = Math.min(2.5, 2200 / origW);
-    } else if (origW > 3500) {
-      scale = 3000 / origW;
+    } else if (origW > 3200) {
+      scale = 2600 / origW;
     }
 
-    const targetW = Math.round(origW * scale);
-    const targetH = Math.round(origH * scale);
+    let targetW = Math.round(origW * scale);
+    let targetH = Math.round(origH * scale);
 
+    // Enforce limits
+    if (targetW > FILE_LIMITS.maxCanvasDimension) {
+      const s = FILE_LIMITS.maxCanvasDimension / targetW;
+      targetW = Math.round(targetW * s);
+      targetH = Math.round(targetH * s);
+    }
+    if (targetH > FILE_LIMITS.maxCanvasDimension) {
+      const s = FILE_LIMITS.maxCanvasDimension / targetH;
+      targetW = Math.round(targetW * s);
+      targetH = Math.round(targetH * s);
+    }
+    if (targetW * targetH > FILE_LIMITS.maxCanvasPixels) {
+      const s = Math.sqrt((FILE_LIMITS.maxCanvasPixels * 0.98) / (targetW * targetH));
+      targetW = Math.floor(targetW * s);
+      targetH = Math.floor(targetH * s);
+    }
+
+    // Small clean white padding around document (16px) to avoid edge character cutoff
+    const padding = 16;
     const canvas = document.createElement('canvas');
-    const drawW = targetW;
-    const drawH = targetH;
-    let drawX = 0;
-    let drawY = 0;
-
-    if (shouldUsePdfLikePage) {
-      // Put wide standalone photos on a portrait page with margins, matching the
-      // shape produced when scanned PDFs are rendered before OCR.
-      const imageWidthRatioOnPage = 468 / 612;
-      const pageAspectRatio = 792 / 612;
-      canvas.width = Math.round(drawW / imageWidthRatioOnPage);
-      canvas.height = Math.round(canvas.width * pageAspectRatio);
-      drawX = Math.round((canvas.width - drawW) / 2);
-      drawY = Math.round(canvas.height * 0.112);
-    } else {
-      canvas.width = targetW;
-      canvas.height = targetH;
-    }
+    canvas.width = targetW + padding * 2;
+    canvas.height = targetH + padding * 2;
 
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return imageSource;
@@ -187,25 +618,19 @@ export async function preprocessImageForOcr(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, drawX, drawY, drawW, drawH);
+    ctx.drawImage(img, padding, padding, targetW, targetH);
 
-    // Grayscale and robust contrast normalization. Work from the actual
-    // document area instead of synthetic margins, and use histogram percentiles
-    // so a few noisy pixels do not dominate the whole image.
+    // Grayscale and robust contrast normalization
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
     const len = data.length;
 
-    const sampleLeft = Math.max(0, Math.floor(drawX));
-    const sampleTop = Math.max(0, Math.floor(drawY));
-    const sampleRight = Math.min(canvas.width, Math.ceil(drawX + drawW));
-    const sampleBottom = Math.min(canvas.height, Math.ceil(drawY + drawH));
     const sampleStep = 8;
     const hist = new Uint32Array(256);
     let sampleCount = 0;
 
-    for (let y = sampleTop; y < sampleBottom; y += sampleStep) {
-      for (let x = sampleLeft; x < sampleRight; x += sampleStep) {
+    for (let y = padding; y < canvas.height - padding; y += sampleStep) {
+      for (let x = padding; x < canvas.width - padding; x += sampleStep) {
         const i = (y * canvas.width + x) * 4;
         const lum = Math.round((data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000);
         hist[Math.max(0, Math.min(255, lum))]++;
@@ -215,32 +640,30 @@ export async function preprocessImageForOcr(
 
     const lowLum = percentileFromHistogram(hist, sampleCount, 0.015);
     const highLum = percentileFromHistogram(hist, sampleCount, 0.985);
-    const range = Math.max(highLum - lowLum, 70);
+    const range = Math.max(highLum - lowLum, 60);
 
     for (let i = 0; i < len; i += 4) {
       const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
       let stretched = ((lum - lowLum) / range) * 255;
       stretched = Math.max(0, Math.min(255, stretched));
 
-      // Clean paper/background while keeping faint glyph strokes and decimal
-      // dots. Mid tones are lifted a bit to suppress watermark noise.
-      if (stretched > 226) {
+      // Controlled whitening: clean light paper background (> 238) to white,
+      // but DO NOT crush midtones (100-230) so small decimal dots and diacritics are safe!
+      if (stretched > 238) {
         stretched = 255;
-      } else if (stretched < 72) {
-        stretched = Math.max(0, stretched * 0.62);
-      } else if (stretched > 150) {
-        stretched = Math.min(255, stretched * 1.08 + 10);
+      } else if (stretched < 50) {
+        stretched = Math.max(0, stretched * 0.85);
       }
       data[i] = stretched;
       data[i + 1] = stretched;
       data[i + 2] = stretched;
     }
 
-    sharpenGrayscaleImage(data, canvas.width, canvas.height, sampleLeft, sampleTop, sampleRight, sampleBottom);
+    sharpenGrayscaleImageControlled(data, canvas.width, canvas.height, padding, padding, canvas.width - padding, canvas.height - padding);
     ctx.putImageData(imgData, 0, 0);
     return canvas;
   } catch (err) {
-    console.warn('Canvas preprocessing skipped:', err);
+    console.warn('Canvas preprocessing skipped due to error, falling back to original source:', err);
     return imageSource;
   }
 }
@@ -257,7 +680,7 @@ function percentileFromHistogram(hist: Uint32Array, count: number, percentile: n
   return 255;
 }
 
-function sharpenGrayscaleImage(
+function sharpenGrayscaleImageControlled(
   data: Uint8ClampedArray,
   width: number,
   height: number,
@@ -280,8 +703,8 @@ function sharpenGrayscaleImage(
       const bottomLum = source[((y + 1) * width + x) * 4];
       const leftLum = source[(y * width + x - 1) * 4];
       const rightLum = source[(y * width + x + 1) * 4];
-      const sharpened = center * 1.85 - (topLum + bottomLum + leftLum + rightLum) * 0.2125;
-      const value = Math.max(0, Math.min(255, sharpened));
+      const sharpened = center * 1.35 - (topLum + bottomLum + leftLum + rightLum) * 0.0875;
+      const value = Math.max(0, Math.min(255, Math.round(sharpened)));
       data[i] = value;
       data[i + 1] = value;
       data[i + 2] = value;
@@ -292,15 +715,15 @@ function sharpenGrayscaleImage(
 function loadImageElement(source: string | HTMLCanvasElement | HTMLImageElement | File | Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     if (typeof Image === 'undefined') {
-      return reject(new Error('Image constructor not available'));
+      return reject(new Error('Image constructor is not available'));
     }
     if (source instanceof HTMLImageElement) {
-      if (source.complete) return resolve(source);
+      if (source.complete && source.naturalWidth > 0) return resolve(source);
       source.onload = () => resolve(source);
       source.onerror = reject;
       return;
     }
-    if (source instanceof HTMLCanvasElement) {
+    if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = reject;
@@ -325,7 +748,7 @@ function loadImageElement(source: string | HTMLCanvasElement | HTMLImageElement 
     } else if (typeof source === 'object' && source !== null) {
       img.src = URL.createObjectURL(source as Blob);
     } else {
-      reject(new Error('Unsupported image source type'));
+      reject(new Error('Định dạng nguồn ảnh không được hỗ trợ.'));
     }
   });
 }
@@ -335,42 +758,82 @@ function loadImageElement(source: string | HTMLCanvasElement | HTMLImageElement 
  */
 export async function extractTextFromImage(
   imageSource: string | HTMLCanvasElement | HTMLImageElement | File | Blob,
-  onProgress?: OcrProgressCallback
+  onProgress?: OcrProgressCallback,
+  abortSignal?: AbortSignal
 ): Promise<string> {
+  if (abortSignal?.aborted) {
+    throw new DOMException('Tác vụ OCR đã bị hủy.', 'AbortError');
+  }
+
   onProgress?.({ message: 'Đang tiền xử lý ảnh và khởi động Tesseract OCR...', progress: 15 });
 
-  // Normalize both standalone images and PDF-rendered scan pages through the
-  // same canvas preprocessing path so OCR behavior stays consistent.
   const processedSource = await preprocessImageForOcr(imageSource);
 
-  const primaryResult = await runExclusiveOcr(async () => {
-    let result: Awaited<ReturnType<typeof runOcrPass>>;
-    activeOcrProgress = onProgress;
+  try {
+    const primaryResult = await runExclusiveOcr(async () => {
+      if (abortSignal?.aborted) {
+        throw createAbortError('Tác vụ OCR đã bị hủy.');
+      }
 
-    try {
-      result = await runOcrPass(processedSource, onProgress);
-    } catch (err) {
-      console.warn('OCR on preprocessed source failed, retrying original source:', err);
-      localOcrWorkerPromise = null;
-      onProgress?.({ message: 'OCR ảnh đã chuẩn hóa bị lỗi, đang thử lại với ảnh gốc...', progress: 88 });
-      result = await runOcrPass(imageSource, onProgress);
-    } finally {
-      activeOcrProgress = undefined;
+      let result: Awaited<ReturnType<typeof runOcrPass>>;
+      activeOcrProgress = onProgress;
+
+      try {
+        result = await runOcrPass(processedSource, onProgress, abortSignal);
+      } catch (err: any) {
+        if (err?.name === 'AbortError') throw err;
+        console.warn('OCR on preprocessed source failed, retrying original source:', err);
+        localOcrWorkerPromise = null;
+        onProgress?.({ message: 'OCR ảnh chuẩn hóa gặp sự cố, đang thử lại với nguồn gốc...', progress: 85 });
+        result = await runOcrPass(imageSource, onProgress, abortSignal);
+      } finally {
+        activeOcrProgress = undefined;
+      }
+
+      return result;
+    });
+
+    onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
+    return getReadableOcrText(primaryResult);
+  } finally {
+    if (typeof HTMLCanvasElement !== 'undefined' && processedSource instanceof HTMLCanvasElement && processedSource !== imageSource) {
+      disposeCanvas(processedSource);
     }
-
-    return result;
-  });
-
-  onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
-  return getReadableOcrText(primaryResult);
+  }
 }
 
 async function runOcrPass(
   processedSource: HTMLCanvasElement | HTMLImageElement | string | File | Blob,
-  onProgress?: OcrProgressCallback
+  onProgress?: OcrProgressCallback,
+  abortSignal?: AbortSignal
 ) {
-  const worker = await getLocalOcrWorker(onProgress);
-  return recognizeOcrVariant(worker, processedSource);
+  const worker = await getLocalOcrWorker(onProgress, abortSignal);
+  if (abortSignal?.aborted) {
+    throw createAbortError('Tác vụ OCR đã bị hủy.');
+  }
+
+  const recognizePromise = recognizeOcrVariant(worker, processedSource);
+  if (!abortSignal) {
+    return recognizePromise;
+  }
+
+  let abortListener: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortListener = () => {
+      localOcrWorkerPromise = null;
+      worker.terminate().catch(() => {});
+      reject(createAbortError('Tác vụ OCR đã bị hủy.'));
+    };
+    abortSignal.addEventListener('abort', abortListener, { once: true });
+  });
+
+  try {
+    return await Promise.race([recognizePromise, abortPromise]);
+  } finally {
+    if (abortListener) {
+      abortSignal.removeEventListener('abort', abortListener);
+    }
+  }
 }
 
 async function runExclusiveOcr<T>(task: () => Promise<T>): Promise<T> {
@@ -382,19 +845,17 @@ async function runExclusiveOcr<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function getLocalOcrWorker(onProgress?: OcrProgressCallback): Promise<OcrWorker> {
+/**
+ * Singleton worker management: worker is initialized once and reused between pages/files
+ */
+export async function getLocalOcrWorker(
+  onProgress?: OcrProgressCallback,
+  abortSignal?: AbortSignal
+): Promise<OcrWorker> {
   activeOcrProgress = onProgress;
 
   if (!localOcrWorkerPromise) {
-    localOcrWorkerPromise = createLocalOcrWorker()
-      .then(async (worker) => {
-        await worker.setParameters({
-          preserve_interword_spaces: '1',
-          tessedit_pageseg_mode: PSM.AUTO,
-          user_defined_dpi: '300',
-        });
-        return worker;
-      })
+    localOcrWorkerPromise = createLocalOcrWorker(abortSignal)
       .catch((err) => {
         localOcrWorkerPromise = null;
         throw err;
@@ -404,34 +865,84 @@ async function getLocalOcrWorker(onProgress?: OcrProgressCallback): Promise<OcrW
   return localOcrWorkerPromise;
 }
 
-async function createLocalOcrWorker() {
+async function createLocalOcrWorker(abortSignal?: AbortSignal): Promise<OcrWorker> {
+  if (abortSignal?.aborted) {
+    throw new DOMException('Tác vụ đã bị hủy.', 'AbortError');
+  }
+
   const languages: Array<'vie' | 'eng'> = ['vie', 'eng'];
   const baseHref = typeof window !== 'undefined'
     ? new URL('.', window.location.href).href.replace(/\/+$/, '') + '/'
     : './';
 
-  return createWorker(languages, undefined, {
-    workerPath: `${baseHref}tesscore/worker.min.js`,
-    corePath: `${baseHref}tesscore`,
-    langPath: `${baseHref}tessdata`,
-    logger: (m) => {
-      if (m.status === 'recognizing text') {
-        const p = 20 + Math.round((m.progress || 0) * 65);
-        activeOcrProgress?.({
-          message: `Tesseract (${languages.join('+')}) đang nhận diện: ${Math.round((m.progress || 0) * 100)}%`,
-          progress: p,
-        });
-      } else if (m.status === 'loading tesseract core' || m.status === 'loading language traineddata') {
-        activeOcrProgress?.({
-          message: `Tesseract (${languages.join('+')}): ${m.status}...`,
-          progress: 25,
-        });
-      }
-    },
-  });
+  try {
+    const worker = await createWorker(languages, undefined, {
+      workerPath: `${baseHref}tesscore/worker.min.js`,
+      corePath: `${baseHref}tesscore`,
+      langPath: `${baseHref}tessdata`,
+      gzip: true,
+      logger: (m) => {
+        if (abortSignal?.aborted) return;
+        if (m.status === 'recognizing text') {
+          const p = 25 + Math.round((m.progress || 0) * 65);
+          activeOcrProgress?.({
+            message: `Tesseract (${languages.join('+')}): ${Math.round((m.progress || 0) * 100)}%`,
+            progress: p,
+          });
+        } else if (m.status === 'loading tesseract core' || m.status === 'loading language traineddata') {
+          activeOcrProgress?.({
+            message: `Tesseract: ${m.status}...`,
+            progress: 20,
+          });
+        }
+      },
+    });
+
+    if (abortSignal?.aborted) {
+      await worker.terminate();
+      throw new DOMException('Tác vụ đã bị hủy.', 'AbortError');
+    }
+
+    await worker.setParameters({
+      preserve_interword_spaces: DEFAULT_OCR_CONFIG.preserveInterwordSpaces,
+      tessedit_pageseg_mode: DEFAULT_OCR_CONFIG.psm,
+      user_defined_dpi: DEFAULT_OCR_CONFIG.userDefinedDpi,
+    });
+
+    return worker;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw err;
+    console.error('Lỗi khi tải hoặc khởi động Tesseract worker cục bộ:', err);
+    throw new Error(
+      'Không thể tải mô hình OCR Tesseract cục bộ (WASM/tessdata). Vui lòng kiểm tra các tệp trong public/tesscore và public/tessdata.'
+    );
+  }
 }
 
-async function recognizeOcrVariant(worker: Awaited<ReturnType<typeof createWorker>>, source: unknown) {
+/**
+ * Terminate worker and free all associated memory
+ */
+export async function terminateOcrWorker(): Promise<void> {
+  if (localOcrWorkerPromise) {
+    try {
+      const worker = await localOcrWorkerPromise;
+      await worker.terminate();
+    } catch {
+      // Ignore termination error
+    } finally {
+      localOcrWorkerPromise = null;
+    }
+  }
+}
+
+/**
+ * Cancels any active OCR job
+ */
+export function cancelActiveOcr(): void {
+  terminateOcrWorker().catch(() => {});
+}
+
+async function recognizeOcrVariant(worker: OcrWorker, source: unknown) {
   const tesseractSource = await prepareTesseractImageSource(source);
   return worker.recognize(
     tesseractSource as any,
@@ -452,35 +963,41 @@ function prepareTesseractImageSource(source: unknown): Promise<unknown> {
   return Promise.resolve(source);
 }
 
-function getReadableOcrText(result: Awaited<ReturnType<Awaited<ReturnType<typeof createWorker>>['recognize']>>): string {
+/**
+ * Decides whether to use plain text or TSV reconstruction.
+ * Requirements:
+ * - Prioritize result.data.text when it has line structure and characters.
+ * - Do NOT replace text simply based on character count.
+ * - Only fall back to TSV when plain text lacks line breaks or is empty.
+ */
+function getReadableOcrText(result: Awaited<ReturnType<OcrWorker['recognize']>>): string {
   const plainText = (result.data.text || '').trim();
+  const plainLines = plainText.split(/\r?\n/).filter((l) => l.trim()).length;
+
+  // If plainText is solid and structured, prefer it directly
+  if (plainText.length > 20 && plainLines >= 2) {
+    return plainText;
+  }
+
   const tsvText = reconstructTextFromTsv(result.data.tsv);
-
-  if (!plainText) return tsvText;
-  if (!tsvText) return plainText;
-
-  const plainChars = plainText.replace(/\s/g, '').length;
-  const tsvChars = tsvText.replace(/\s/g, '').length;
-  const plainLines = plainText.split(/\r?\n/).filter((line) => line.trim()).length;
-  const tsvLines = tsvText.split(/\r?\n/).filter((line) => line.trim()).length;
-
-  if (tsvChars > plainChars * 1.2 || tsvLines > plainLines * 1.5) {
+  if (tsvText && !plainText) {
     return tsvText;
   }
 
-  return plainText;
+  return plainText || tsvText;
 }
 
-function reconstructTextFromTsv(tsv: string | null | undefined): string {
+export function reconstructTextFromTsv(tsv: string | null | undefined): string {
   if (!tsv) return '';
 
-  type WordBox = {
+  interface WordBox {
     text: string;
     left: number;
     top: number;
     width: number;
+    confidence: number;
     lineKey: string;
-  };
+  }
 
   const words: WordBox[] = [];
   const rows = tsv.split(/\r?\n/);
@@ -500,6 +1017,7 @@ function reconstructTextFromTsv(tsv: string | null | undefined): string {
       left: Number(cols[6]) || 0,
       top: Number(cols[7]) || 0,
       width: Number(cols[8]) || 0,
+      confidence: Number.isFinite(conf) ? conf : 80,
       lineKey: `${cols[1]}:${cols[2]}:${cols[3]}:${cols[4]}`,
     });
   }
@@ -548,26 +1066,40 @@ function reconstructTextFromTsv(tsv: string | null | undefined): string {
  */
 export async function processMedicalFile(
   file: File,
-  onProgress?: OcrProgressCallback
+  onProgress?: OcrProgressCallback,
+  abortSignal?: AbortSignal
 ): Promise<LabReport> {
+  if (abortSignal?.aborted) {
+    throw new DOMException('Tác vụ đọc file đã bị hủy.', 'AbortError');
+  }
+
+  if (file.size > FILE_LIMITS.maxFileSize) {
+    throw new Error(
+      `Dung lượng file "${file.name}" (${(file.size / 1024 / 1024).toFixed(1)}MB) vượt quá giới hạn cho phép (tối đa 30MB).`
+    );
+  }
+
   const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   let extractedText = '';
   let previewDataUrl = '';
 
   if (isPdf) {
     onProgress?.({ message: 'Đang mở tập tin PDF bằng PDF.js...', progress: 5 });
-    const { text, pageDataUrls } = await extractTextFromPdf(file, onProgress);
+    const { text, pageDataUrls } = await extractTextFromPdf(file, onProgress, abortSignal);
     extractedText = text;
     if (pageDataUrls.length > 0) {
       previewDataUrl = pageDataUrls[0];
     } else {
-      // Create object URL or data URL
       previewDataUrl = await readFileAsDataUrl(file);
     }
   } else {
     onProgress?.({ message: 'Đang tải hình ảnh và quét với Tesseract OCR...', progress: 10 });
     previewDataUrl = await readFileAsDataUrl(file);
-    extractedText = await extractTextFromImage(file, onProgress);
+    extractedText = await extractTextFromImage(file, onProgress, abortSignal);
+  }
+
+  if (abortSignal?.aborted) {
+    throw new DOMException('Tác vụ đã bị hủy.', 'AbortError');
   }
 
   onProgress?.({ message: 'Đang bóc tách chỉ số xét nghiệm & đối chiếu danh mục...', progress: 96 });
