@@ -138,10 +138,8 @@ export async function preprocessImageForOcr(
     const origW = img.naturalWidth || img.width;
     const origH = img.naturalHeight || img.height;
 
-    // Keep OCR input close to PDF.js rendered scan pages. The test PDF embeds
-    // the same landscape image at roughly 1600px wide after rendering; overly
-    // large standalone JPEGs can make dots, table lines, and watermark edges
-    // compete with text.
+    // Keep OCR input close to PDF.js rendered scan pages. Very large landscape
+    // photos can make dots, table lines, and watermark edges compete with text.
     const aspectRatio = origW / Math.max(origH, 1);
     const shouldUsePdfLikePage = aspectRatio > 1.1 && origW > 1800;
     let scale = 1.0;
@@ -163,9 +161,8 @@ export async function preprocessImageForOcr(
     let drawY = 0;
 
     if (shouldUsePdfLikePage) {
-      // Match the PDF test case more closely: the same landscape image is placed
-      // inside a portrait PDF page with margins, and that layout OCRs better than
-      // sending the landscape bitmap full-frame.
+      // Put wide standalone photos on a portrait page with margins, matching the
+      // shape produced when scanned PDFs are rendered before OCR.
       const imageWidthRatioOnPage = 468 / 612;
       const pageAspectRatio = 792 / 612;
       canvas.width = Math.round(drawW / imageWidthRatioOnPage);
@@ -186,25 +183,40 @@ export async function preprocessImageForOcr(
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, drawX, drawY, drawW, drawH);
 
-    // Grayscale and dynamic contrast stretching
+    // Grayscale and mild contrast normalization. Work from the actual document
+    // area instead of the synthetic white margins so standalone images behave
+    // closer to PDF-rendered scan pages without over-amplifying watermark/table
+    // lines into text-like noise.
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
     const len = data.length;
 
     let minLum = 255;
     let maxLum = 0;
-    for (let i = 0; i < len; i += 64) {
-      const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-      if (lum < minLum) minLum = lum;
-      if (lum > maxLum) maxLum = lum;
+    const sampleLeft = Math.max(0, Math.floor(drawX));
+    const sampleTop = Math.max(0, Math.floor(drawY));
+    const sampleRight = Math.min(canvas.width, Math.ceil(drawX + drawW));
+    const sampleBottom = Math.min(canvas.height, Math.ceil(drawY + drawH));
+    const sampleStep = 8;
+
+    for (let y = sampleTop; y < sampleBottom; y += sampleStep) {
+      for (let x = sampleLeft; x < sampleRight; x += sampleStep) {
+        const i = (y * canvas.width + x) * 4;
+        const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+        if (lum < minLum) minLum = lum;
+        if (lum > maxLum) maxLum = lum;
+      }
     }
 
-    const range = Math.max(maxLum - minLum, 40);
+    const range = Math.max(maxLum - minLum, 80);
     for (let i = 0; i < len; i += 4) {
       const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
       let stretched = ((lum - minLum) / range) * 255;
-      if (stretched > 205) {
+      stretched = Math.max(0, Math.min(255, stretched));
+      if (stretched > 232) {
         stretched = 255;
+      } else if (stretched < 28) {
+        stretched = 0;
       }
       data[i] = stretched;
       data[i + 1] = stretched;
@@ -273,7 +285,7 @@ export async function extractTextFromImage(
   // same canvas preprocessing path so OCR behavior stays consistent.
   const processedSource = await preprocessImageForOcr(imageSource);
 
-  const primaryResult = await runOcrPass(['vie', 'eng'], imageSource, processedSource, onProgress);
+  const primaryResult = await runOcrPass(['vie', 'eng'], processedSource, onProgress);
 
   onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
   return getReadableOcrText(primaryResult);
@@ -281,7 +293,6 @@ export async function extractTextFromImage(
 
 async function runOcrPass(
   languages: Array<'vie' | 'eng'>,
-  originalSource: string | HTMLCanvasElement | HTMLImageElement | File | Blob,
   processedSource: HTMLCanvasElement | HTMLImageElement | string | File | Blob,
   onProgress?: OcrProgressCallback
 ) {
@@ -294,18 +305,7 @@ async function runOcrPass(
       user_defined_dpi: '300',
     });
 
-    const processedResult = await recognizeOcrVariant(worker, processedSource);
-    let bestResult = processedResult;
-
-    if (processedSource !== originalSource) {
-      onProgress?.({ message: 'Đang đối chiếu OCR với ảnh gốc để chọn kết quả tốt nhất...', progress: 88 });
-      const originalResult = await recognizeOcrVariant(worker, originalSource);
-      if (scoreOcrResult(originalResult) > scoreOcrResult(processedResult) + 2) {
-        bestResult = originalResult;
-      }
-    }
-
-    return bestResult;
+    return recognizeOcrVariant(worker, processedSource);
   } finally {
     await worker.terminate();
   }
@@ -346,16 +346,6 @@ async function recognizeOcrVariant(worker: Awaited<ReturnType<typeof createWorke
     { rotateAuto: true },
     { text: true, tsv: true }
   );
-}
-
-function scoreOcrResult(result: Awaited<ReturnType<Awaited<ReturnType<typeof createWorker>>['recognize']>>): number {
-  const text = result.data.text || '';
-  const confidence = Number(result.data.confidence) || 0;
-  const usefulChars = text.replace(/\s/g, '').length;
-  const digitCount = (text.match(/\d/g) || []).length;
-  const labKeywordCount = (text.match(/glucose|creatinine|cholesterol|triglyceride|egfr|got|gpt|ggt|natri|kali|calci/gi) || []).length;
-
-  return confidence + Math.min(12, usefulChars / 120) + Math.min(8, digitCount / 12) + Math.min(8, labKeywordCount * 2);
 }
 
 function getReadableOcrText(result: Awaited<ReturnType<Awaited<ReturnType<typeof createWorker>>['recognize']>>): string {

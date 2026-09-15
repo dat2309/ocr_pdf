@@ -241,15 +241,15 @@ export function cleanOcrArtifacts(rawText: string): string {
     // Triglyceride 237* -> Triglyceride 2.37 *
     line = line.replace(/\b(Triglyceride\s+)237(\s*\*?)/gi, '$12.37$2');
 
-    // 6. Fix broken reference range fragments seen in scanned lab tables
-    line = line.replace(/Nam:\s*74\s*[-–—]\s*LINE\s*5896/gi, 'Nam: 74-110; Nữ: 58-96');
-    line = line.replace(/Nem\s+hàn\s+i\s+0?66\s*-/gi, 'Nam <1.20; Nữ <1.10');
+    // 6. Fix common gender-label OCR typos without forcing a specific lab context.
+    line = line.replace(/\bNem\s*:/gi, 'Nam:');
 
     // 7. Fix % misread from * flag before medical units: 237% mmol/L -> 237 * mmol/L, 52% U/L -> 52 * U/L
     line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|g\/dL|g\/L|mg\/dL|U\/L|UI|mIU|pmol|mL))/gi, '$1 * ');
 
     // 8. Fix units typos: umoVL / umot, -> umol/L, mei, -> mg/dL, mL/phat -> mL/phút
     line = line.replace(/\bumo[tvVlL]+(?:\/L)?\b[,\s|/]*/gi, 'umol/L ');
+    line = line.replace(/\bmgd\b/gi, 'mg/dL');
     line = line.replace(/\bmei[,\s|/]+/gi, 'mg/dL ');
     line = line.replace(/\bmL\/ph[au]t\b/gi, 'mL/phút');
     line = line.replace(/\bmmo\b(?!\/)/gi, 'mmol/L');
