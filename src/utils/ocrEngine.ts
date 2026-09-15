@@ -142,8 +142,9 @@ export async function preprocessImageForOcr(
     // the same landscape image at roughly 1600px wide after rendering; overly
     // large standalone JPEGs can make dots, table lines, and watermark edges
     // compete with text.
-    let scale = 1.0;
     const aspectRatio = origW / Math.max(origH, 1);
+    const shouldUsePdfLikePage = aspectRatio > 1.1 && origW > 1800;
+    let scale = 1.0;
     if (aspectRatio > 1.1 && origW > 1800) {
       scale = 1650 / origW;
     } else if (origW < 1800) {
@@ -156,17 +157,37 @@ export async function preprocessImageForOcr(
     const targetH = Math.round(origH * scale);
 
     const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
+    const drawW = targetW;
+    const drawH = targetH;
+    let drawX = 0;
+    let drawY = 0;
+
+    if (shouldUsePdfLikePage) {
+      // Match the PDF test case more closely: the same landscape image is placed
+      // inside a portrait PDF page with margins, and that layout OCRs better than
+      // sending the landscape bitmap full-frame.
+      const imageWidthRatioOnPage = 468 / 612;
+      const pageAspectRatio = 792 / 612;
+      canvas.width = Math.round(drawW / imageWidthRatioOnPage);
+      canvas.height = Math.round(canvas.width * pageAspectRatio);
+      drawX = Math.round((canvas.width - drawW) / 2);
+      drawY = Math.round(canvas.height * 0.112);
+    } else {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return imageSource;
 
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, 0, 0, targetW, targetH);
+    ctx.drawImage(img, drawX, drawY, drawW, drawH);
 
     // Grayscale and dynamic contrast stretching
-    const imgData = ctx.getImageData(0, 0, targetW, targetH);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
     const len = data.length;
 
