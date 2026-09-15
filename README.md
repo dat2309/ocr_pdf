@@ -119,7 +119,7 @@ Kết quả mong muốn:
 
 - Đọc file ảnh trực tiếp trong trình duyệt và tạo preview từ chính file upload.
 - Đưa ảnh rời qua cùng bước canvas preprocessing đang dùng cho PDF ảnh:
-  - resize về vùng độ phân giải phù hợp cho OCR,
+  - resize về vùng độ phân giải phù hợp cho OCR; ảnh ngang lớn được đưa về khoảng 1650px rộng để gần với kích thước PDF.js render từ PDF scan,
   - chuyển grayscale,
   - kéo tương phản,
   - làm nền giấy sáng hơn.

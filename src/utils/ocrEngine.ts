@@ -138,9 +138,15 @@ export async function preprocessImageForOcr(
     const origW = img.naturalWidth || img.width;
     const origH = img.naturalHeight || img.height;
 
-    // Optimal recognition resolution for OCR is approx 300 DPI, typically 2000 - 2400px wide
+    // Keep OCR input close to PDF.js rendered scan pages. The test PDF embeds
+    // the same landscape image at roughly 1600px wide after rendering; overly
+    // large standalone JPEGs can make dots, table lines, and watermark edges
+    // compete with text.
     let scale = 1.0;
-    if (origW < 1800) {
+    const aspectRatio = origW / Math.max(origH, 1);
+    if (aspectRatio > 1.1 && origW > 1800) {
+      scale = 1650 / origW;
+    } else if (origW < 1800) {
       scale = Math.min(2.5, 2200 / origW);
     } else if (origW > 3500) {
       scale = 3000 / origW;
