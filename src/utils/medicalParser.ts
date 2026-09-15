@@ -408,12 +408,12 @@ export function parseMedicalReportFromText(
 
       // Extract value
       const numberRegex = /([0-9]+[.,][0-9]+|[0-9]+)/g;
-      const allNumbers = valueSearchLine.match(numberRegex) || [];
-      const refNumbers = testRefRange.match(numberRegex) || [];
+      const allNumbers: string[] = valueSearchLine.match(numberRegex) || [];
+      const refNumbers: string[] = (testRefRange && testRefRange.match(numberRegex)) || [];
 
       let testVal = '';
       if (allNumbers.length > 0) {
-        const candidateNumbers = allNumbers.filter((n) => !refNumbers.includes(n));
+        const candidateNumbers = allNumbers.filter((n: string) => !refNumbers.includes(n));
         if (candidateNumbers.length > 0) {
           testVal = candidateNumbers[0];
         } else {
