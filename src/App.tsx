@@ -8,6 +8,7 @@ import { SAMPLE_REPORTS } from './data/sampleReports';
 import { LabReport } from './types';
 import { copyTableToClipboard } from './utils/excelExporter';
 import { processMedicalFile } from './utils/ocrEngine';
+import { parseMedicalReportFromText } from './utils/medicalParser';
 import { Eye, Table } from 'lucide-react';
 
 export default function App() {
@@ -27,7 +28,6 @@ export default function App() {
     setProgressPercent(5);
 
     try {
-      // First attempt local browser-based OCR with PDF.js and Tesseract.js
       const parsedReport = await processMedicalFile(file, ({ message, progress }) => {
         setProgressMessage(message);
         setProgressPercent(progress);
@@ -36,43 +36,8 @@ export default function App() {
       setReport(parsedReport);
       setIsUploaderOpen(false);
     } catch (localErr: any) {
-      console.warn('Local OCR threw error, falling back to server PDF.js/Tesseract endpoint:', localErr);
-      setProgressMessage('Đang xử lý qua bộ giải mã server...');
-      setProgressPercent(50);
-
-      try {
-        const reader = new FileReader();
-        const base64Promise = new Promise<string>((resolve, reject) => {
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = (err) => reject(err);
-        });
-        reader.readAsDataURL(file);
-        const dataUrl = await base64Promise;
-
-        const response = await fetch('/api/analyze-lab-test', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            fileBase64: dataUrl,
-            mimeType: file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
-            fileName: file.name,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `Lỗi máy chủ (${response.status})`);
-        }
-
-        const parsedReport: LabReport = await response.json();
-        setReport(parsedReport);
-        setIsUploaderOpen(false);
-      } catch (serverErr: any) {
-        console.error('Lỗi phân tích file hoàn toàn:', serverErr);
-        setUploadError(serverErr.message || 'Không thể trích xuất dữ liệu từ file xét nghiệm bằng PDF.js & Tesseract.');
-      }
+      console.error('Lỗi khi bóc tách tài liệu:', localErr);
+      setUploadError(localErr.message || 'Không thể trích xuất dữ liệu từ file xét nghiệm bằng PDF.js & Tesseract.');
     } finally {
       setIsAnalyzing(false);
       setProgressPercent(0);
@@ -81,33 +46,27 @@ export default function App() {
   };
 
   const handleReAnalyze = async () => {
-    if (!report || !report.fileDataUrl) return;
+    if (!report) return;
     setIsAnalyzing(true);
     setUploadError(null);
 
     try {
-      const response = await fetch('/api/analyze-lab-test', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          fileBase64: report.fileDataUrl,
-          mimeType: report.fileType === 'pdf' ? 'application/pdf' : 'image/jpeg',
-          fileName: report.fileName,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Lỗi máy chủ (${response.status})`);
+      if (report.rawText) {
+        const parsedPartial = parseMedicalReportFromText(report.rawText, report.fileName);
+        setReport({
+          ...report,
+          patient: parsedPartial.patient || report.patient,
+          tests: parsedPartial.tests || [],
+          totalDetected: parsedPartial.totalDetected || 0,
+          abnormalCount: parsedPartial.abnormalCount || 0,
+          unmappedCount: parsedPartial.unmappedCount || 0,
+          avgConfidence: parsedPartial.avgConfidence || 90,
+          rawSummary: parsedPartial.rawSummary || report.rawSummary,
+        });
       }
-
-      const parsedReport: LabReport = await response.json();
-      setReport(parsedReport);
     } catch (err: any) {
-      console.error('Lỗi khi đọc lại tập tin:', err);
-      alert(err.message || 'Không thể đọc lại tập tin bằng PDF.js & Tesseract.');
+      console.error('Lỗi khi phân tích lại:', err);
+      alert(err.message || 'Không thể phân tích lại tập tin.');
     } finally {
       setIsAnalyzing(false);
     }
