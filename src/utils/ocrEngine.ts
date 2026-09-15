@@ -285,7 +285,14 @@ export async function extractTextFromImage(
   // same canvas preprocessing path so OCR behavior stays consistent.
   const processedSource = await preprocessImageForOcr(imageSource);
 
-  const primaryResult = await runOcrPass(['vie', 'eng'], processedSource, onProgress);
+  let primaryResult: Awaited<ReturnType<typeof runOcrPass>>;
+  try {
+    primaryResult = await runOcrPass(['vie', 'eng'], processedSource, onProgress);
+  } catch (err) {
+    console.warn('OCR on preprocessed source failed, retrying original source:', err);
+    onProgress?.({ message: 'OCR ảnh đã chuẩn hóa bị lỗi, đang thử lại với ảnh gốc...', progress: 88 });
+    primaryResult = await runOcrPass(['vie', 'eng'], imageSource, onProgress);
+  }
 
   onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
   return getReadableOcrText(primaryResult);
@@ -341,11 +348,24 @@ async function createLocalOcrWorker(
 }
 
 async function recognizeOcrVariant(worker: Awaited<ReturnType<typeof createWorker>>, source: unknown) {
+  const tesseractSource = await prepareTesseractImageSource(source);
   return worker.recognize(
-    source as any,
+    tesseractSource as any,
     { rotateAuto: true },
     { text: true, tsv: true }
   );
+}
+
+function prepareTesseractImageSource(source: unknown): Promise<unknown> {
+  if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
+    return new Promise((resolve) => {
+      source.toBlob((blob) => {
+        resolve(blob || source.toDataURL('image/png'));
+      }, 'image/png');
+    });
+  }
+
+  return Promise.resolve(source);
 }
 
 function getReadableOcrText(result: Awaited<ReturnType<Awaited<ReturnType<typeof createWorker>>['recognize']>>): string {
