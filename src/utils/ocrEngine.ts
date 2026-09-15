@@ -129,7 +129,15 @@ export async function extractTextFromImage(
 ): Promise<string> {
   onProgress?.({ message: 'Đang khởi động Tesseract OCR (vie+eng)...', progress: 15 });
 
+  // Resolve base URL for local assets (works seamlessly on localhost and GitHub Pages)
+  const baseHref = typeof window !== 'undefined'
+    ? new URL('.', window.location.href).href.replace(/\/+$/, '') + '/'
+    : './';
+
   const worker = await createWorker(['vie', 'eng'], undefined, {
+    workerPath: `${baseHref}tesscore/worker.min.js`,
+    corePath: `${baseHref}tesscore`,
+    langPath: `${baseHref}tessdata`,
     logger: (m) => {
       if (m.status === 'recognizing text') {
         const p = 20 + Math.round((m.progress || 0) * 70);
