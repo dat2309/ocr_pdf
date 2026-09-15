@@ -276,16 +276,59 @@ export async function extractTextFromImage(
       user_defined_dpi: '300',
     });
 
-    const result = await worker.recognize(
-      processedSource as any,
-      { rotateAuto: true },
-      { text: true, tsv: true }
-    );
+    const processedResult = await recognizeOcrVariant(worker, processedSource);
+    let bestResult = processedResult;
+
+    if (processedSource !== imageSource) {
+      onProgress?.({ message: 'Đang đối chiếu OCR với ảnh gốc để chọn kết quả tốt nhất...', progress: 88 });
+      const originalResult = await recognizeOcrVariant(worker, imageSource);
+      if (scoreOcrResult(originalResult) > scoreOcrResult(processedResult) + 2) {
+        bestResult = originalResult;
+      }
+    }
+
     onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
-    return reconstructTextFromTsv(result.data.tsv) || result.data.text.trim();
+    return getReadableOcrText(bestResult);
   } finally {
     await worker.terminate();
   }
+}
+
+async function recognizeOcrVariant(worker: Awaited<ReturnType<typeof createWorker>>, source: unknown) {
+  return worker.recognize(
+    source as any,
+    { rotateAuto: true },
+    { text: true, tsv: true }
+  );
+}
+
+function scoreOcrResult(result: Awaited<ReturnType<Awaited<ReturnType<typeof createWorker>>['recognize']>>): number {
+  const text = result.data.text || '';
+  const confidence = Number(result.data.confidence) || 0;
+  const usefulChars = text.replace(/\s/g, '').length;
+  const digitCount = (text.match(/\d/g) || []).length;
+  const labKeywordCount = (text.match(/glucose|creatinine|cholesterol|triglyceride|egfr|got|gpt|ggt|natri|kali|calci/gi) || []).length;
+
+  return confidence + Math.min(12, usefulChars / 120) + Math.min(8, digitCount / 12) + Math.min(8, labKeywordCount * 2);
+}
+
+function getReadableOcrText(result: Awaited<ReturnType<Awaited<ReturnType<typeof createWorker>>['recognize']>>): string {
+  const plainText = (result.data.text || '').trim();
+  const tsvText = reconstructTextFromTsv(result.data.tsv);
+
+  if (!plainText) return tsvText;
+  if (!tsvText) return plainText;
+
+  const plainChars = plainText.replace(/\s/g, '').length;
+  const tsvChars = tsvText.replace(/\s/g, '').length;
+  const plainLines = plainText.split(/\r?\n/).filter((line) => line.trim()).length;
+  const tsvLines = tsvText.split(/\r?\n/).filter((line) => line.trim()).length;
+
+  if (tsvChars > plainChars * 1.2 || tsvLines > plainLines * 1.5) {
+    return tsvText;
+  }
+
+  return plainText;
 }
 
 function reconstructTextFromTsv(tsv: string | null | undefined): string {
