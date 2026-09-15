@@ -67,6 +67,83 @@ flowchart TD
     I --> J[Tải file .xlsx về máy tính]
 ```
 
+### Những gì đã làm cho từng loại file
+
+| Loại file | Nhánh xử lý hiện tại | Mục tiêu |
+| --- | --- | --- |
+| PDF có text thật | Đọc text layer bằng `PDF.js` | Giữ text gốc, không OCR lại khi không cần |
+| PDF ảnh / PDF scan | Render trang PDF thành canvas rồi OCR | Xử lý PDF scan local, ổn định như một ảnh phẳng |
+| Ảnh rời (`JPG`, `PNG`, `WebP`) | Chạy nhiều pass OCR và chọn kết quả tốt nhất | Giảm sai khác so với Tesseract online demo |
+
+#### 1. PDF có text thật (PDF điện tử)
+
+Đã làm:
+
+- Dùng `PDF.js` để mở PDF và đọc từng trang bằng `page.getTextContent()`.
+- Gom text item theo tọa độ dòng (`y`) và sắp xếp theo cột (`x`) để dựng lại thứ tự đọc.
+- Chỉ fallback sang OCR khi text nhúng quá ít, tránh trường hợp PDF text đang đúng nhưng bị OCR lại thành sai.
+- Vẫn render trang PDF ra canvas để hiển thị preview, nhưng preview không ảnh hưởng tới text đã trích xuất.
+- Đưa text gốc đọc được vào `medicalParser.ts` để bóc tách thông tin xét nghiệm.
+
+Kết quả mong muốn:
+
+- PDF điện tử chạy nhanh hơn vì không dùng Tesseract.
+- Hạn chế lỗi OCR ở dấu thập phân, ký hiệu `*`, đơn vị và khoảng tham chiếu.
+
+#### 2. PDF ảnh / PDF scan
+
+Đã làm:
+
+- Dùng `PDF.js` kiểm tra text layer trước; nếu text gần như rỗng thì xem trang đó là scan.
+- Render từng trang scan thành canvas ở độ phân giải cao để OCR trên ảnh phẳng.
+- Chạy Tesseract.js local với model `vie + eng`.
+- Cấu hình Tesseract với:
+  - `PSM.AUTO` để tự phân tích layout,
+  - `preserve_interword_spaces: 1` để giữ khoảng cách cột,
+  - `user_defined_dpi: 300` để ổn định nhận dạng.
+- Trả kết quả OCR qua `medicalParser.ts` để chuẩn hóa lỗi thường gặp:
+  - đơn vị bị sai như `umoVL` -> `umol/L`,
+  - dấu `*` bị đọc thành ký tự lạ,
+  - một số dấu thập phân bị mất theo ngữ cảnh xét nghiệm,
+  - khoảng tham chiếu bị vỡ do OCR.
+- Nâng tessdata local từ bản nhỏ/fast lên `tessdata_best` cho `vie` và `eng`.
+
+Kết quả mong muốn:
+
+- PDF scan hoạt động hoàn toàn local/offline.
+- Kết quả ổn định hơn ảnh rời vì PDF được render thành canvas sạch trước khi OCR.
+
+#### 3. File ảnh rời (`JPG`, `PNG`, `WebP`)
+
+Đã làm:
+
+- Đọc file ảnh trực tiếp trong trình duyệt và tạo preview từ chính file upload.
+- Tạo thêm một bản ảnh tiền xử lý bằng canvas:
+  - resize về vùng độ phân giải phù hợp cho OCR,
+  - chuyển grayscale,
+  - kéo tương phản,
+  - làm nền giấy sáng hơn.
+- Chạy OCR bằng `vie + eng` để hỗ trợ cả tiếng Việt, tiếng Anh, tên chỉ số, đơn vị và bảng Latin.
+- Trong cùng pass `vie + eng`, OCR cả ảnh đã tiền xử lý và ảnh gốc, sau đó chấm điểm để chọn bản tốt hơn.
+- Không chạy thêm pass `eng` riêng để tránh tăng thời gian xử lý ảnh rời.
+- Ưu tiên text gốc từ Tesseract; chỉ dùng TSV reconstruction khi TSV có vẻ đầy đủ hơn text thường.
+- Điểm chọn kết quả dựa trên confidence, độ dài text hữu ích, số lượng chữ số và số từ khóa xét nghiệm nhận diện được.
+
+Kết quả mong muốn:
+
+- Ảnh rời vẫn có bước đối chiếu ảnh gốc/ảnh tiền xử lý.
+- Giảm thời gian xử lý bằng cách chỉ dùng một model `vie + eng`.
+
+### Asset local / offline
+
+Ứng dụng được cấu hình để chạy OCR và PDF hoàn toàn bằng asset local:
+
+- `public/tesscore/`: Tesseract worker và WebAssembly core.
+- `public/tessdata/`: model `vie` và `eng` bản `tessdata_best`, gồm cả `.traineddata` và `.traineddata.gz`.
+- `docs/tesscore/`, `docs/tessdata/`: bản tương ứng cho build tĩnh.
+- PDF worker được bundle local qua Vite/PDF.js, không fallback CDN.
+- Không cần Google Fonts hoặc asset ngoài để xử lý OCR/PDF.
+
 ---
 
 ## 📁 Cấu Trúc Thư Mục
@@ -77,7 +154,9 @@ trích-xuất-kết-quả-xét-nghiệm-sang-excel/
 │   ├── index.html            # Trang chủ sau khi build
 │   └── assets/               # JS bundle, CSS và pdf.worker
 ├── public/
-│   └── .nojekyll             # Cấu hình tránh bỏ qua thư mục assets trên GitHub Pages
+│   ├── .nojekyll             # Cấu hình tránh bỏ qua thư mục assets trên GitHub Pages
+│   ├── tesscore/             # Tesseract.js worker và WASM core chạy local/offline
+│   └── tessdata/             # Model OCR vie/eng bản tessdata_best
 ├── src/
 │   ├── components/
 │   │   ├── DocumentViewer.tsx     # Cột trái: xem tài liệu gốc & tab xem Raw OCR Text

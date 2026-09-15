@@ -4,8 +4,22 @@ import path from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig(() => {
+  const buildTime = new Date().toLocaleString("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
   return {
     base: "./",
+    define: {
+      __BUILD_TIME__: JSON.stringify(buildTime),
+    },
     build: {
       outDir: "docs", // Build thẳng vào thư mục docs
       emptyOutDir: false,

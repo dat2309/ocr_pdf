@@ -245,21 +245,9 @@ export async function extractTextFromImage(
   const processedSource = await preprocessImageForOcr(imageSource);
 
   const primaryResult = await runOcrPass(['vie', 'eng'], imageSource, processedSource, onProgress);
-  let bestResult = primaryResult;
-
-  // PDF scans arrive here as a rendered canvas and are already behaving well.
-  // Standalone images often match the public OCR demo better with English-only
-  // recognition because lab reports mix English labels, numbers, and Latin units.
-  if (typeof HTMLCanvasElement !== 'undefined' && !(imageSource instanceof HTMLCanvasElement)) {
-    onProgress?.({ message: 'Đang thử thêm chế độ English-only cho ảnh rời...', progress: 90 });
-    const englishResult = await runOcrPass(['eng'], imageSource, processedSource, onProgress);
-    if (scoreOcrResult(englishResult) > scoreOcrResult(primaryResult) + 1) {
-      bestResult = englishResult;
-    }
-  }
 
   onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
-  return getReadableOcrText(bestResult);
+  return getReadableOcrText(primaryResult);
 }
 
 async function runOcrPass(

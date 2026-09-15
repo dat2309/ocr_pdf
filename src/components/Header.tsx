@@ -34,8 +34,12 @@ export const Header: React.FC<HeaderProps> = ({
                 PDF.js & Tesseract OCR
               </span>
             </div>
-            <p className="text-xs text-slate-500 hidden sm:block">
-              Trích xuất kết quả xét nghiệm từ Ảnh & PDF sang Excel tự động
+            <p className="text-xs text-slate-500 hidden sm:flex items-center gap-2">
+              <span>Trích xuất kết quả xét nghiệm từ Ảnh & PDF sang Excel tự động</span>
+              <span className="text-slate-300">|</span>
+              <span className="font-mono text-[11px] text-slate-400" title="Thời gian build">
+                Build: {__BUILD_TIME__}
+              </span>
             </p>
           </div>
         </div>
