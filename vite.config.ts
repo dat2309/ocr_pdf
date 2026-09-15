@@ -8,6 +8,7 @@ export default defineConfig(() => {
     base: "./",
     build: {
       outDir: "docs", // Build thẳng vào thư mục docs
+      emptyOutDir: false,
     },
     plugins: [react(), tailwindcss()],
     resolve: {

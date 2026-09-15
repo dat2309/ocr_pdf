@@ -53,7 +53,10 @@ export async function extractTextFromPdf(
     });
 
     const page = await pdfDoc.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 2.0 });
+    const unscaledViewport = page.getViewport({ scale: 1.0 });
+    // Dynamic scale to achieve optimal OCR resolution (~2000-2400px width)
+    const optimalScale = Math.max(2.0, Math.min(3.5, 2200 / unscaledViewport.width));
+    const viewport = page.getViewport({ scale: optimalScale });
 
     // Try extracting digital text
     const textContent = await page.getTextContent();
@@ -85,6 +88,9 @@ export async function extractTextFromPdf(
       }
     }
 
+    // Check if extracted digital text actually contains standard medical lab tests
+    const hasDigitalLabTests = /\b(glucose|creatinine|cholesterol|triglycerid|ast|alt|ggt|ure|hba1c|wbc|rbc|plt|natri|kali|clo|calci|got|gpt|hgb|hct|mcv|mch)\b/i.test(pageText);
+
     // Render page to canvas for preview & scanned fallback
     if (typeof document !== 'undefined') {
       try {
@@ -98,14 +104,14 @@ export async function extractTextFromPdf(
           const pageDataUrl = canvas.toDataURL('image/jpeg', 0.85);
           pageDataUrls.push(pageDataUrl);
 
-          // If digital text is almost empty (< 50 chars), run Tesseract OCR on rendered canvas!
-          if (pageText.trim().length < 50) {
+          // If digital text is almost empty (< 120 chars) or lacks medical lab keywords, it's a scanned PDF
+          if (pageText.trim().length < 120 || !hasDigitalLabTests) {
             onProgress?.({
-              message: `Trang ${pageNum} là ảnh scan, đang chạy Tesseract OCR...`,
+              message: `Trang ${pageNum} là ảnh scan, đang chạy Tesseract OCR tối ưu hóa...`,
               progress: 60,
             });
             const ocrResult = await extractTextFromImage(canvas, onProgress);
-            pageText += '\n' + ocrResult;
+            pageText = ocrResult;
           }
         }
       } catch (renderErr) {
@@ -121,13 +127,125 @@ export async function extractTextFromPdf(
 }
 
 /**
+ * Preprocesses an image via offscreen HTML5 Canvas:
+ * 1. Upscaling if width < 1800px to ensure decimal dots and small fonts are clearly resolved.
+ * 2. Grayscale conversion and dynamic contrast stretching to make text dark and paper background clean white.
+ */
+export async function preprocessImageForOcr(
+  imageSource: string | HTMLCanvasElement | HTMLImageElement | File | Blob
+): Promise<HTMLCanvasElement | HTMLImageElement | string | File | Blob> {
+  if (typeof document === 'undefined') return imageSource;
+
+  try {
+    const img = await loadImageElement(imageSource);
+    const origW = img.naturalWidth || img.width;
+    const origH = img.naturalHeight || img.height;
+
+    // Optimal recognition resolution for OCR is approx 300 DPI, typically 2000 - 2400px wide
+    let scale = 1.0;
+    if (origW < 1800) {
+      scale = Math.min(2.5, 2200 / origW);
+    } else if (origW > 3500) {
+      scale = 3000 / origW;
+    }
+
+    const targetW = Math.round(origW * scale);
+    const targetH = Math.round(origH * scale);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return imageSource;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+
+    // Grayscale and dynamic contrast stretching
+    const imgData = ctx.getImageData(0, 0, targetW, targetH);
+    const data = imgData.data;
+    const len = data.length;
+
+    let minLum = 255;
+    let maxLum = 0;
+    for (let i = 0; i < len; i += 64) {
+      const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+      if (lum < minLum) minLum = lum;
+      if (lum > maxLum) maxLum = lum;
+    }
+
+    const range = Math.max(maxLum - minLum, 40);
+    for (let i = 0; i < len; i += 4) {
+      const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+      let stretched = ((lum - minLum) / range) * 255;
+      if (stretched > 205) {
+        stretched = 255;
+      }
+      data[i] = stretched;
+      data[i + 1] = stretched;
+      data[i + 2] = stretched;
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+    return canvas;
+  } catch (err) {
+    console.warn('Canvas preprocessing skipped:', err);
+    return imageSource;
+  }
+}
+
+function loadImageElement(source: string | HTMLCanvasElement | HTMLImageElement | File | Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    if (typeof Image === 'undefined') {
+      return reject(new Error('Image constructor not available'));
+    }
+    if (source instanceof HTMLImageElement) {
+      if (source.complete) return resolve(source);
+      source.onload = () => resolve(source);
+      source.onerror = reject;
+      return;
+    }
+    if (source instanceof HTMLCanvasElement) {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = source.toDataURL('image/png');
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      if (typeof source !== 'string') {
+        URL.revokeObjectURL(img.src);
+      }
+      resolve(img);
+    };
+    img.onerror = (err) => {
+      if (typeof source !== 'string') {
+        URL.revokeObjectURL(img.src);
+      }
+      reject(err);
+    };
+    if (typeof source === 'string') {
+      img.src = source;
+    } else if (typeof source === 'object' && source !== null) {
+      img.src = URL.createObjectURL(source as Blob);
+    } else {
+      reject(new Error('Unsupported image source type'));
+    }
+  });
+}
+
+/**
  * Extract text from an image using Tesseract.js (Vietnamese + English)
  */
 export async function extractTextFromImage(
   imageSource: string | HTMLCanvasElement | HTMLImageElement | File | Blob,
   onProgress?: OcrProgressCallback
 ): Promise<string> {
-  onProgress?.({ message: 'Đang khởi động Tesseract OCR (vie+eng)...', progress: 15 });
+  onProgress?.({ message: 'Đang tiền xử lý ảnh và khởi động Tesseract OCR...', progress: 15 });
+
+  const processedSource = await preprocessImageForOcr(imageSource);
 
   // Resolve base URL for local assets (works seamlessly on localhost and GitHub Pages)
   const baseHref = typeof window !== 'undefined'
@@ -155,7 +273,11 @@ export async function extractTextFromImage(
   });
 
   try {
-    const result = await worker.recognize(imageSource as any);
+    await worker.setParameters({
+      preserve_interword_spaces: '1',
+    });
+
+    const result = await worker.recognize(processedSource as any);
     onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
     return result.data.text;
   } finally {
@@ -214,7 +336,7 @@ export async function processMedicalFile(
     unmappedCount: parsedPartial.unmappedCount || 0,
     avgConfidence: parsedPartial.avgConfidence || 90,
     rawSummary: parsedPartial.rawSummary || `Đọc được ${parsedPartial.tests?.length || 0} chỉ số`,
-    rawText: extractedText || parsedPartial.rawText || '',
+    rawText: parsedPartial.rawText || extractedText || '',
     createdAt: new Date().toISOString(),
   };
 

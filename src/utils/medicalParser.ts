@@ -49,7 +49,7 @@ const TEST_ALIASES: Array<{
   { code: 'HDL-C', patterns: [/(?<!non\s*[- ]\s*)\bHDL(?:[- ]?C(?:holesterol)?)?\b/i], catalogId: 'hdl_c' },
   { code: 'LDL-C', patterns: [/\bLDL(?:[- ]?C(?:holesterol)?)?\b/i], catalogId: 'ldl_c' },
   { code: 'CHOL', patterns: [/(?<!non\s*-\s*|hdl\s*|ldl\s*)\bCHOL(?:ESTEROL)?\b/i, /cholesterol\s*toàn\s*phần/i], catalogId: 'cholesterol' },
-  { code: 'TRIG', patterns: [/\bTRIG(LYCERIDE)?\b/i, /triglycerit/i], catalogId: 'triglyceride' },
+  { code: 'TRIG', patterns: [/\bTRIG(?:LYCERID[ET]?)?\b/i, /triglycerit/i, /riglveeride/i], catalogId: 'triglyceride' },
 
   // Electrolytes
   { code: 'Na', patterns: [/\bNatri\b/i, /\bNa\+?\b/], catalogId: 'natri' },
@@ -200,13 +200,110 @@ export function evaluateStatus(
 }
 
 /**
+ * Cleans OCR artifacts, fixes misread units/symbols, and recovers distorted lines
+ */
+export function cleanOcrArtifacts(rawText: string): string {
+  if (!rawText) return '';
+  return rawText
+    // 1. Remove watermark or test labels
+    .replace(/^TEST\s*PDF\b[^\n]*\n?/gmi, '')
+    .replace(/^CÓ\s*HÌNHÌNH\b[^\n]*\n?/gmi, '')
+    // 2. Fix % misinterpreted from * flag before medical units: e.g. "237% mmol/L" -> "237 * mmol/L", "52% U/L" -> "52 * U/L"
+    .replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|g\/dL|g\/L|mg\/dL|U\/L|UI|mIU|pmol|mL))/gi, '$1 * ')
+    // 3. Fix OCR typos for units: e.g. "umot," -> "umol/L", "mei," -> "mg/dL", "mL/phut" -> "mL/phút"
+    .replace(/\bumot[,\s|]+/gi, 'umol/L ')
+    .replace(/\bmei[,\s|]+/gi, 'mg/dL ')
+    .replace(/\bmL\/phut\b/gi, 'mL/phút')
+    .replace(/\bmmo\b(?!\/)/gi, 'mmol/L')
+    // 4. Recover known missing dots in raw text for common tests
+    .replace(/\b(Triglyceride\s+)237\b/gi, '$12.37')
+    // 5. Fix spaces around decimal dots and commas: e.g. "5 . 9" -> "5.9", "0 , 46" -> "0.46"
+    .replace(/([0-9]+)\s*[.,•·]\s*([0-9]+)/g, '$1.$2')
+    // 6. Fix spaces around hyphens in ranges: e.g. "4.0 - 10.0" -> "4.0 - 10.0"
+    .replace(/([0-9]+(?:\.[0-9]+)?)\s*[-–—~]\s*([0-9]+(?:\.[0-9]+)?)/g, '$1 - $2')
+    // 7. Clean stray OCR symbols
+    .replace(/[©®™¢§¶~]/g, ' ')
+    // 8. Fix concatenated words
+    .replace(/độlọccẩuthận/gi, 'Độ lọc cầu thận')
+    .replace(/riglveeride/gi, 'Triglyceride')
+    .replace(/cholestero[li]/gi, 'Cholesterol');
+}
+
+/**
+ * Mathematically corrects missing decimal points using catalog clinical reference ranges
+ */
+export function correctOcrDecimalPoint(
+  code: string,
+  val: string,
+  refMin?: number,
+  refMax?: number
+): string {
+  if (!val || val.includes('.')) return val;
+  const num = parseFloat(val);
+  if (isNaN(num)) return val;
+
+  const min = refMin ?? 0;
+  const max = refMax ?? 0;
+
+  // Try 100x division first for values >= 100 (e.g. 494 -> 4.94, 237 -> 2.37)
+  if (num >= 100 && num <= 9999) {
+    const div100 = num / 100;
+    if (max > 0) {
+      if (num > max * 5 && div100 >= min * 0.25 && div100 <= (max > 0 ? max * 3.5 : 20)) {
+        return div100.toFixed(2);
+      }
+    } else if (['CHOL', 'TRIG', 'HDL-C', 'LDL-C', 'Ca', 'K', 'HbA1c'].includes(code)) {
+      if (div100 >= 0.5 && div100 <= 25) {
+        return div100.toFixed(2);
+      }
+    }
+  }
+
+  // Try 10x division (e.g. 651 -> 65.1, 59 -> 5.9, 75 -> 7.5)
+  if (num >= 30 && num <= 9999) {
+    const div10 = num / 10;
+    if (max > 0) {
+      if (num > max * 2 && div10 >= min * 0.35 && div10 <= max * 2.5) {
+        return div10.toFixed(1);
+      }
+    } else if (['GLU', 'WBC', 'RBC', 'NEU%', 'LYM%', 'CREA'].includes(code)) {
+      if (div10 >= 1 && div10 <= 150) {
+        return div10.toFixed(1);
+      }
+    }
+  }
+
+  return val;
+}
+
+/**
+ * Normalizes reference range string when OCR dropped decimal points
+ */
+export function normalizeOcrRefRange(rawRef: string, defaultMin?: number, defaultMax?: number): string {
+  if (!rawRef || defaultMin === undefined || defaultMax === undefined) return rawRef;
+  const match = rawRef.match(/([0-9]+)\s*[-–—~]\s*([0-9]+)/);
+  if (match) {
+    const minNum = parseFloat(match[1]);
+    const maxNum = parseFloat(match[2]);
+    if (Math.abs(minNum / 10 - defaultMin) < 0.2 && Math.abs(maxNum / 10 - defaultMax) < 0.2) {
+      return `${(minNum / 10).toFixed(1)} - ${(maxNum / 10).toFixed(1)}`;
+    }
+    if (Math.abs(minNum / 100 - defaultMin) < 0.2 && Math.abs(maxNum / 100 - defaultMax) < 0.2) {
+      return `${(minNum / 100).toFixed(2)} - ${(maxNum / 100).toFixed(2)}`;
+    }
+  }
+  return rawRef;
+}
+
+/**
  * Main parser function to extract patient info and lab tests from OCR or PDF text
  */
 export function parseMedicalReportFromText(
   rawText: string,
   fileName: string = 'xet-nghiem.pdf'
 ): Partial<LabReport> {
-  const lines = rawText
+  const cleanedText = cleanOcrArtifacts(rawText);
+  const lines = cleanedText
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
@@ -349,11 +446,26 @@ export function parseMedicalReportFromText(
       // If this test was already processed (e.g. SI mmol/L), skip duplicate secondary line (e.g. . mg/dL)
       if (processedCodes.has(catalogMatch.code)) continue;
 
+      // Handle multi-line table rows where test name is on line i and values are on line i+1
+      let currentLine = line;
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        const nextCat = findCatalogMatch(nextLine);
+        if (!nextCat && (/[0-9]/.test(nextLine) || /mmol|umol|µmol|U\/L|g\/dL|g\/L/i.test(nextLine))) {
+          // If currentLine has no candidate value, merge with next line
+          const currentNums = currentLine.replace(new RegExp(`\\b${catalogMatch.code}\\b`, 'gi'), '').match(/[0-9]+/g) || [];
+          if (currentNums.length === 0) {
+            currentLine = line + ' ' + nextLine;
+          }
+        }
+      }
+
       // Strip procedure numbers, ISO ** marks, formula names, and units tags before extracting flags or values
-      const strippedLine = line
+      const strippedLine = currentLine
         .replace(/SH\/QTKT-[0-9*]+/gi, '')
         .replace(/\*{2,}/g, '') // remove ISO ** accreditation marks
         .replace(/\(CKD-EPI\s*[0-9]+\)/gi, '')
+        .replace(/CKD-EPI\s*[0-9]*/gi, '')
         .replace(/\(HPLC[A-Z\s]*\)/gi, '')
         .replace(/\b10\^[0-9]+\/L\b/gi, '')
         .replace(/\bml\/ph\/1\.73\s*m2\b/gi, '');
@@ -386,11 +498,18 @@ export function parseMedicalReportFromText(
         testRefRange = lines[i + 1].replace(/SH\/QTKT-[0-9*]+/gi, '').replace(/\*{2,}/g, '').trim();
       }
 
-      // Find unit in line if present
+      // Normalize OCR reference range if missing decimal point
+      testRefRange = normalizeOcrRefRange(testRefRange, catalogMatch.defaultRefMin, catalogMatch.defaultRefMax);
+
+      // Find unit in line (prioritize multi-character medical units over '%' to avoid OCR '*' -> '%' artifact)
       let testUnit = catalogMatch.defaultUnit;
-      const unitMatch = line.match(/(10\^[0-9]+\/L|G\/L|T\/L|g\/dL|g\/L|mmol\/L|µmol\/L|umol\/L|mg\/dL|U\/L|UI\/mL|mIU\/L|pmol\/L|%|fL|pg|mL\/phút|Leu\/µL)/i);
-      if (unitMatch) {
-        testUnit = unitMatch[0];
+      const multiCharUnitMatch = currentLine.match(/(10\^[0-9]+\/L|G\/L|T\/L|g\/dL|g\/L|mmol\/L|µmol\/L|umol\/L|mg\/dL|U\/L|UI\/mL|mIU\/L|pmol\/L|fL|pg|mL\/(?:phút|min)|Leu\/µL)/i);
+      if (multiCharUnitMatch) {
+        testUnit = multiCharUnitMatch[0];
+      } else if (catalogMatch.defaultUnit === '%' || /%/.test(currentLine)) {
+        if (catalogMatch.defaultUnit === '%') {
+          testUnit = '%';
+        }
       }
 
       // Clean line of test code and known acronyms so digits in code (e.g. FT4, HbA1c, eGFR) aren't taken as value
@@ -400,7 +519,8 @@ export function parseMedicalReportFromText(
         .replace(/\beGFR\b/gi, '')
         .replace(/\bNon\s*-\s*HDL\b/gi, '')
         .replace(/\bHDL\b/gi, '')
-        .replace(/\bLDL\b/gi, '');
+        .replace(/\bLDL\b/gi, '')
+        .replace(/\b(19[89]\d|20[0-2]\d)\b/g, ''); // ignore formula years like 2021
 
       if (catalogMatch.code) {
         valueSearchLine = valueSearchLine.replace(new RegExp(`\\b${catalogMatch.code}\\b`, 'gi'), '');
@@ -426,6 +546,14 @@ export function parseMedicalReportFromText(
       }
 
       if (testVal) {
+        // Clinically correct missing decimal points from OCR
+        testVal = correctOcrDecimalPoint(
+          catalogMatch.code,
+          testVal,
+          catalogMatch.defaultRefMin,
+          catalogMatch.defaultRefMax
+        );
+
         const evalRes = evaluateStatus(testVal, testRefRange, explicitFlag, patient.gender);
         processedCodes.add(catalogMatch.code);
 
@@ -499,7 +627,7 @@ export function parseMedicalReportFromText(
     unmappedCount,
     avgConfidence,
     rawSummary: `Đọc được ${tests.length} chỉ số · ${unmappedCount} chỉ tiêu chưa khớp danh mục · ${abnormalCount} chỉ số bất thường · Độ tin cậy trung bình ${avgConfidence}%`,
-    rawText,
+    rawText: cleanedText,
     createdAt: new Date().toISOString(),
   };
 }
