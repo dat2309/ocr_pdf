@@ -242,12 +242,9 @@ export async function extractTextFromImage(
 ): Promise<string> {
   onProgress?.({ message: 'Đang tiền xử lý ảnh và khởi động Tesseract OCR...', progress: 15 });
 
-  // Standalone image files are passed to Tesseract as-is. This matches public
-  // Tesseract demos more closely and avoids canvas preprocessing changing
-  // decimal points, table lines, or watermark contrast. PDF scans still arrive
-  // as canvas pages and keep the preprocessing path that works well for them.
-  const shouldPreprocess = typeof HTMLCanvasElement !== 'undefined' && imageSource instanceof HTMLCanvasElement;
-  const processedSource = shouldPreprocess ? await preprocessImageForOcr(imageSource) : imageSource;
+  // Normalize both standalone images and PDF-rendered scan pages through the
+  // same canvas preprocessing path so OCR behavior stays consistent.
+  const processedSource = await preprocessImageForOcr(imageSource);
 
   const primaryResult = await runOcrPass(['vie', 'eng'], imageSource, processedSource, onProgress);
 

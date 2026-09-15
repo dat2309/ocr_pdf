@@ -73,7 +73,7 @@ flowchart TD
 | --- | --- | --- |
 | PDF có text thật | Đọc text layer bằng `PDF.js` | Giữ text gốc, không OCR lại khi không cần |
 | PDF ảnh / PDF scan | Render trang PDF thành canvas rồi OCR | Xử lý PDF scan local, ổn định như một ảnh phẳng |
-| Ảnh rời (`JPG`, `PNG`, `WebP`) | OCR trực tiếp ảnh gốc bằng `vie + eng` | Giảm thời gian xử lý và tránh preprocessing làm sai ảnh |
+| Ảnh rời (`JPG`, `PNG`, `WebP`) | Chuẩn hóa qua canvas rồi OCR như PDF ảnh | Đồng nhất pipeline OCR giữa ảnh rời và PDF scan |
 
 #### 1. PDF có text thật (PDF điện tử)
 
@@ -118,16 +118,20 @@ Kết quả mong muốn:
 Đã làm:
 
 - Đọc file ảnh trực tiếp trong trình duyệt và tạo preview từ chính file upload.
-- Không áp dụng canvas preprocessing cho ảnh rời, vì bước này có thể làm thay đổi dấu thập phân, đường kẻ bảng, watermark hoặc tương phản chữ.
+- Đưa ảnh rời qua cùng bước canvas preprocessing đang dùng cho PDF ảnh:
+  - resize về vùng độ phân giải phù hợp cho OCR,
+  - chuyển grayscale,
+  - kéo tương phản,
+  - làm nền giấy sáng hơn.
 - Chạy OCR bằng `vie + eng` để hỗ trợ cả tiếng Việt, tiếng Anh, tên chỉ số, đơn vị và bảng Latin.
-- Chỉ OCR ảnh gốc trong một pass `vie + eng`.
+- OCR trên canvas đã chuẩn hóa trong một pass `vie + eng`.
 - Không chạy thêm pass `eng` riêng để tránh tăng thời gian xử lý ảnh rời.
 - Ưu tiên text gốc từ Tesseract; chỉ dùng TSV reconstruction khi TSV có vẻ đầy đủ hơn text thường.
 
 Kết quả mong muốn:
 
-- Ảnh rời gần với cách Tesseract online demo đọc ảnh gốc hơn.
-- Giảm thời gian xử lý bằng cách chỉ chạy một pass OCR.
+- Ảnh rời và PDF ảnh dùng cùng cách chuẩn hóa trước OCR.
+- Giảm thời gian xử lý bằng cách chỉ chạy một pass OCR `vie + eng`.
 
 ### Asset local / offline
 
