@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { DocumentViewer } from './components/DocumentViewer';
 import { LabResultsTable } from './components/LabResultsTable';
@@ -20,8 +20,11 @@ export default function App() {
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<'document' | 'results'>('results');
+  const isUploadRunningRef = useRef(false);
 
   const handleUploadFile = async (file: File) => {
+    if (isUploadRunningRef.current) return;
+    isUploadRunningRef.current = true;
     setIsAnalyzing(true);
     setUploadError(null);
     setProgressMessage('Đang khởi tạo bộ máy đọc PDF.js & Tesseract OCR...');
@@ -39,6 +42,7 @@ export default function App() {
       console.error('Lỗi khi bóc tách tài liệu:', localErr);
       setUploadError(localErr.message || 'Không thể trích xuất dữ liệu từ file xét nghiệm bằng PDF.js & Tesseract.');
     } finally {
+      isUploadRunningRef.current = false;
       setIsAnalyzing(false);
       setProgressPercent(0);
       setProgressMessage('');

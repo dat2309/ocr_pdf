@@ -13,6 +13,12 @@ if (typeof window !== 'undefined') {
 
 export type OcrProgressCallback = (info: { message: string; progress: number }) => void;
 
+type OcrWorker = Awaited<ReturnType<typeof createWorker>>;
+
+let ocrQueue: Promise<void> = Promise.resolve();
+let localOcrWorkerPromise: Promise<OcrWorker> | null = null;
+let activeOcrProgress: OcrProgressCallback | undefined;
+
 /**
  * Extract text from a PDF file using PDF.js.
  * If pages are digital, extracts structured text directly.
@@ -285,43 +291,69 @@ export async function extractTextFromImage(
   // same canvas preprocessing path so OCR behavior stays consistent.
   const processedSource = await preprocessImageForOcr(imageSource);
 
-  let primaryResult: Awaited<ReturnType<typeof runOcrPass>>;
-  try {
-    primaryResult = await runOcrPass(['vie', 'eng'], processedSource, onProgress);
-  } catch (err) {
-    console.warn('OCR on preprocessed source failed, retrying original source:', err);
-    onProgress?.({ message: 'OCR ảnh đã chuẩn hóa bị lỗi, đang thử lại với ảnh gốc...', progress: 88 });
-    primaryResult = await runOcrPass(['vie', 'eng'], imageSource, onProgress);
-  }
+  const primaryResult = await runExclusiveOcr(async () => {
+    let result: Awaited<ReturnType<typeof runOcrPass>>;
+    activeOcrProgress = onProgress;
+
+    try {
+      result = await runOcrPass(processedSource, onProgress);
+    } catch (err) {
+      console.warn('OCR on preprocessed source failed, retrying original source:', err);
+      localOcrWorkerPromise = null;
+      onProgress?.({ message: 'OCR ảnh đã chuẩn hóa bị lỗi, đang thử lại với ảnh gốc...', progress: 88 });
+      result = await runOcrPass(imageSource, onProgress);
+    } finally {
+      activeOcrProgress = undefined;
+    }
+
+    return result;
+  });
 
   onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
   return getReadableOcrText(primaryResult);
 }
 
 async function runOcrPass(
-  languages: Array<'vie' | 'eng'>,
   processedSource: HTMLCanvasElement | HTMLImageElement | string | File | Blob,
   onProgress?: OcrProgressCallback
 ) {
-  const worker = await createLocalOcrWorker(languages, onProgress);
-
-  try {
-    await worker.setParameters({
-      preserve_interword_spaces: '1',
-      tessedit_pageseg_mode: PSM.AUTO,
-      user_defined_dpi: '300',
-    });
-
-    return recognizeOcrVariant(worker, processedSource);
-  } finally {
-    await worker.terminate();
-  }
+  const worker = await getLocalOcrWorker(onProgress);
+  return recognizeOcrVariant(worker, processedSource);
 }
 
-async function createLocalOcrWorker(
-  languages: Array<'vie' | 'eng'>,
-  onProgress?: OcrProgressCallback
-) {
+async function runExclusiveOcr<T>(task: () => Promise<T>): Promise<T> {
+  const run = ocrQueue.then(task, task);
+  ocrQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+async function getLocalOcrWorker(onProgress?: OcrProgressCallback): Promise<OcrWorker> {
+  activeOcrProgress = onProgress;
+
+  if (!localOcrWorkerPromise) {
+    localOcrWorkerPromise = createLocalOcrWorker()
+      .then(async (worker) => {
+        await worker.setParameters({
+          preserve_interword_spaces: '1',
+          tessedit_pageseg_mode: PSM.AUTO,
+          user_defined_dpi: '300',
+        });
+        return worker;
+      })
+      .catch((err) => {
+        localOcrWorkerPromise = null;
+        throw err;
+      });
+  }
+
+  return localOcrWorkerPromise;
+}
+
+async function createLocalOcrWorker() {
+  const languages: Array<'vie' | 'eng'> = ['vie', 'eng'];
   const baseHref = typeof window !== 'undefined'
     ? new URL('.', window.location.href).href.replace(/\/+$/, '') + '/'
     : './';
@@ -333,12 +365,12 @@ async function createLocalOcrWorker(
     logger: (m) => {
       if (m.status === 'recognizing text') {
         const p = 20 + Math.round((m.progress || 0) * 65);
-        onProgress?.({
+        activeOcrProgress?.({
           message: `Tesseract (${languages.join('+')}) đang nhận diện: ${Math.round((m.progress || 0) * 100)}%`,
           progress: p,
         });
       } else if (m.status === 'loading tesseract core' || m.status === 'loading language traineddata') {
-        onProgress?.({
+        activeOcrProgress?.({
           message: `Tesseract (${languages.join('+')}): ${m.status}...`,
           progress: 25,
         });
