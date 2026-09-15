@@ -244,30 +244,31 @@ export async function extractTextFromImage(
 
   const processedSource = await preprocessImageForOcr(imageSource);
 
-  // Resolve base URL for local assets (works seamlessly on localhost and GitHub Pages)
-  const baseHref = typeof window !== 'undefined'
-    ? new URL('.', window.location.href).href.replace(/\/+$/, '') + '/'
-    : './';
+  const primaryResult = await runOcrPass(['vie', 'eng'], imageSource, processedSource, onProgress);
+  let bestResult = primaryResult;
 
-  const worker = await createWorker(['vie', 'eng'], undefined, {
-    workerPath: `${baseHref}tesscore/worker.min.js`,
-    corePath: `${baseHref}tesscore`,
-    langPath: `${baseHref}tessdata`,
-    logger: (m) => {
-      if (m.status === 'recognizing text') {
-        const p = 20 + Math.round((m.progress || 0) * 70);
-        onProgress?.({
-          message: `Tesseract đang nhận diện chữ viết: ${Math.round((m.progress || 0) * 100)}%`,
-          progress: p,
-        });
-      } else if (m.status === 'loading tesseract core' || m.status === 'loading language traineddata') {
-        onProgress?.({
-          message: `Tesseract: ${m.status}...`,
-          progress: 25,
-        });
-      }
-    },
-  });
+  // PDF scans arrive here as a rendered canvas and are already behaving well.
+  // Standalone images often match the public OCR demo better with English-only
+  // recognition because lab reports mix English labels, numbers, and Latin units.
+  if (typeof HTMLCanvasElement !== 'undefined' && !(imageSource instanceof HTMLCanvasElement)) {
+    onProgress?.({ message: 'Đang thử thêm chế độ English-only cho ảnh rời...', progress: 90 });
+    const englishResult = await runOcrPass(['eng'], imageSource, processedSource, onProgress);
+    if (scoreOcrResult(englishResult) > scoreOcrResult(primaryResult) + 1) {
+      bestResult = englishResult;
+    }
+  }
+
+  onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
+  return getReadableOcrText(bestResult);
+}
+
+async function runOcrPass(
+  languages: Array<'vie' | 'eng'>,
+  originalSource: string | HTMLCanvasElement | HTMLImageElement | File | Blob,
+  processedSource: HTMLCanvasElement | HTMLImageElement | string | File | Blob,
+  onProgress?: OcrProgressCallback
+) {
+  const worker = await createLocalOcrWorker(languages, onProgress);
 
   try {
     await worker.setParameters({
@@ -279,19 +280,47 @@ export async function extractTextFromImage(
     const processedResult = await recognizeOcrVariant(worker, processedSource);
     let bestResult = processedResult;
 
-    if (processedSource !== imageSource) {
+    if (processedSource !== originalSource) {
       onProgress?.({ message: 'Đang đối chiếu OCR với ảnh gốc để chọn kết quả tốt nhất...', progress: 88 });
-      const originalResult = await recognizeOcrVariant(worker, imageSource);
+      const originalResult = await recognizeOcrVariant(worker, originalSource);
       if (scoreOcrResult(originalResult) > scoreOcrResult(processedResult) + 2) {
         bestResult = originalResult;
       }
     }
 
-    onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
-    return getReadableOcrText(bestResult);
+    return bestResult;
   } finally {
     await worker.terminate();
   }
+}
+
+async function createLocalOcrWorker(
+  languages: Array<'vie' | 'eng'>,
+  onProgress?: OcrProgressCallback
+) {
+  const baseHref = typeof window !== 'undefined'
+    ? new URL('.', window.location.href).href.replace(/\/+$/, '') + '/'
+    : './';
+
+  return createWorker(languages, undefined, {
+    workerPath: `${baseHref}tesscore/worker.min.js`,
+    corePath: `${baseHref}tesscore`,
+    langPath: `${baseHref}tessdata`,
+    logger: (m) => {
+      if (m.status === 'recognizing text') {
+        const p = 20 + Math.round((m.progress || 0) * 65);
+        onProgress?.({
+          message: `Tesseract (${languages.join('+')}) đang nhận diện: ${Math.round((m.progress || 0) * 100)}%`,
+          progress: p,
+        });
+      } else if (m.status === 'loading tesseract core' || m.status === 'loading language traineddata') {
+        onProgress?.({
+          message: `Tesseract (${languages.join('+')}): ${m.status}...`,
+          progress: 25,
+        });
+      }
+    },
+  });
 }
 
 async function recognizeOcrVariant(worker: Awaited<ReturnType<typeof createWorker>>, source: unknown) {
