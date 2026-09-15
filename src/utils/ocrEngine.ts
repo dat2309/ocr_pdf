@@ -1,7 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { createWorker } from 'tesseract.js';
 import { LabReport } from '../types';
-import { parseMedicalReportFromText } from './medicalParser';
+import { parseMedicalReportFromText, cleanOcrArtifacts } from './medicalParser';
 
 // Configure PDF.js worker locally using Vite asset resolution (offline-first, no CDN dependency)
 if (typeof window !== 'undefined') {
@@ -279,7 +279,8 @@ export async function extractTextFromImage(
 
     const result = await worker.recognize(processedSource as any);
     onProgress?.({ message: 'Tesseract OCR hoàn tất!', progress: 95 });
-    return result.data.text;
+    // Process and normalize raw data immediately after OCR scanning
+    return cleanOcrArtifacts(result.data.text);
   } finally {
     await worker.terminate();
   }

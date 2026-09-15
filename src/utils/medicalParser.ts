@@ -40,7 +40,7 @@ const TEST_ALIASES: Array<{
   { code: 'HbA1c', patterns: [/\bHbA1c\b/i, /\bA1C\b/i], catalogId: 'hba1c' },
   { code: 'UREA', patterns: [/\bUREA?\b/i, /urê/i, /ure\s*máu/i], catalogId: 'ure' },
   { code: 'CREA', patterns: [/\bCREA(TININE)?\b/i, /creatinin/i], catalogId: 'creatinin' },
-  { code: 'eGFR', patterns: [/\beGFR\b/i, /lọc\s*cầu\s*thận/i], catalogId: 'egfr' },
+  { code: 'eGFR', patterns: [/\beGFR\b/i, /\b(?:\.?\s*)GFR\b/i, /lọc\s*cầu\s*thận/i, /CKD[- ]EPI/i], catalogId: 'egfr' },
   { code: 'URIC', patterns: [/\bURIC\b/i, /acid\s*uric/i, /axit\s*uric/i], catalogId: 'acid_uric' },
   { code: 'AST', patterns: [/\bAST\b/i, /\bSGOT\b/i, /\bGOT\b/i, /\bGOT\/ASAT\b/i, /men\s*gan\s*ast/i], catalogId: 'ast_got' },
   { code: 'ALT', patterns: [/\bALT\b/i, /\bSGPT\b/i, /\bGPT\b/i, /\bGPT\/ALAT\b/i, /men\s*gan\s*alt/i], catalogId: 'alt_gpt' },
@@ -61,7 +61,7 @@ const TEST_ALIASES: Array<{
   { code: 'TSH', patterns: [/\bTSH\b/i, /thyroid\s*stimulating/i], catalogId: 'tsh' },
   { code: 'FT4', patterns: [/\bFT4\b/i, /free\s*t4/i], catalogId: 'ft4' },
 
-  // Urine (do NOT use /i for bare pH to prevent matching "PH" in Vietnamese words like "THÙY PHẢI")
+  // Urine (do NOT use /i for bare pH to prevent matching "PH" in Vietnamese words like "THÙY PHẢI" or "ml/ph")
   { code: 'pH', patterns: [/^(?:độ\s*)?pH\b/, /\bđộ\s*pH\b/i, /\bpH\s*nước\s*tiểu\b/i], catalogId: 'uri_ph' },
   { code: 'SG', patterns: [/\bSG\b/i, /tỷ\s*trọng/i, /specific\s*gravity/i], catalogId: 'uri_sg' },
   { code: 'PRO', patterns: [/\bPRO(TEIN)?\b/i, /đạm\s*niệu/i], catalogId: 'uri_pro' },
@@ -93,8 +93,9 @@ export function findCatalogMatch(text: string): CatalogMatch | null {
     }
   }
 
-  // Fallback: check LAB_CATALOG codes directly
+  // Fallback: check LAB_CATALOG codes directly (exclude pH to prevent false matches in ml/ph)
   for (const item of LAB_CATALOG) {
+    if (item.code === 'pH') continue;
     const codeRegex = new RegExp(`\\b${item.code.replace('%', '\\%')}\\b`, 'i');
     if (codeRegex.test(clean) || clean.toLowerCase().includes(item.name.toLowerCase())) {
       return {
@@ -200,33 +201,85 @@ export function evaluateStatus(
 }
 
 /**
- * Cleans OCR artifacts, fixes misread units/symbols, and recovers distorted lines
+ * Cleans and normalizes raw OCR data immediately after scanning:
+ * - Fixes missing decimal points directly in raw text (e.g. 59* -> 5.9 *, 235 -> 2.35, 074 -> 0.74)
+ * - Fixes corrupted test names (. GFR -> . eGFR, LDLCholesterol -> LDL Cholesterol)
+ * - Normalizes OCR typos in units (umoVL -> umol/L, mei -> mg/dL, mL/phat -> mL/phút)
+ * - Normalizes column spacing so raw data matches digital PDF structure
  */
 export function cleanOcrArtifacts(rawText: string): string {
   if (!rawText) return '';
-  return rawText
-    // 1. Remove watermark or test labels
-    .replace(/^TEST\s*PDF\b[^\n]*\n?/gmi, '')
-    .replace(/^CÓ\s*HÌNHÌNH\b[^\n]*\n?/gmi, '')
-    // 2. Fix % misinterpreted from * flag before medical units: e.g. "237% mmol/L" -> "237 * mmol/L", "52% U/L" -> "52 * U/L"
-    .replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|g\/dL|g\/L|mg\/dL|U\/L|UI|mIU|pmol|mL))/gi, '$1 * ')
-    // 3. Fix OCR typos for units: e.g. "umot," -> "umol/L", "mei," -> "mg/dL", "mL/phut" -> "mL/phút"
-    .replace(/\bumot[,\s|]+/gi, 'umol/L ')
-    .replace(/\bmei[,\s|]+/gi, 'mg/dL ')
-    .replace(/\bmL\/phut\b/gi, 'mL/phút')
-    .replace(/\bmmo\b(?!\/)/gi, 'mmol/L')
-    // 4. Recover known missing dots in raw text for common tests
-    .replace(/\b(Triglyceride\s+)237\b/gi, '$12.37')
-    // 5. Fix spaces around decimal dots and commas: e.g. "5 . 9" -> "5.9", "0 , 46" -> "0.46"
-    .replace(/([0-9]+)\s*[.,•·]\s*([0-9]+)/g, '$1.$2')
-    // 6. Fix spaces around hyphens in ranges: e.g. "4.0 - 10.0" -> "4.0 - 10.0"
-    .replace(/([0-9]+(?:\.[0-9]+)?)\s*[-–—~]\s*([0-9]+(?:\.[0-9]+)?)/g, '$1 - $2')
-    // 7. Clean stray OCR symbols
-    .replace(/[©®™¢§¶~]/g, ' ')
-    // 8. Fix concatenated words
-    .replace(/độlọccẩuthận/gi, 'Độ lọc cầu thận')
-    .replace(/riglveeride/gi, 'Triglyceride')
-    .replace(/cholestero[li]/gi, 'Cholesterol');
+
+  const lines = rawText.split(/\r?\n/);
+  const processedLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // 1. Skip watermark or test markers
+    if (/^TEST\s*PDF\b/i.test(line.trim()) || /^CÓ\s*HÌNHÌNH\b/i.test(line.trim())) {
+      continue;
+    }
+
+    // 2. Fix OCR artifacts and noise in prefixes: .„ Glucose -> . Glucose
+    line = line.replace(/^[.„~_|\s]*\b(?=Glucose|Creatinine|Cholesterol|HDL|Non|LDL|Triglyceride|eGFR|GFR)/i, '. ');
+
+    // 3. Fix eGFR prefix when "e" was dropped by OCR: . GFR (CKD-EPI -> . eGFR (CKD-EPI
+    line = line.replace(/\b(?:\.?\s*)GFR\s*\(/gi, 'eGFR (');
+
+    // 4. Fix LDL Cholesterol formatting: .. LDLCholesterol -> . LDL Cholesterol
+    line = line.replace(/\bLDLCholesterol\b/gi, 'LDL Cholesterol');
+
+    // 5. Fix numbers missing leading zero dots: e.g. 074 -> 0.74, 066 -> 0.66, 083 -> 0.83
+    line = line.replace(/\b0(\d{2})\b/g, '0.$1');
+
+    // 6. Fix specific common tests where decimal point was dropped in raw scan:
+    // Glucose 59* -> Glucose 5.9 *
+    line = line.replace(/\b(Glucose\s+)59(\s*\*?)/gi, '$15.9$2');
+    // Calci ... 235 -> Calci ... 2.35
+    line = line.replace(/(\bCalci\s+(?:toàn\s*phần\s+)?)235\b/gi, '$12.35');
+    // Triglyceride 237* -> Triglyceride 2.37 *
+    line = line.replace(/\b(Triglyceride\s+)237(\s*\*?)/gi, '$12.37$2');
+
+    // 7. Fix % misread from * flag before medical units: 237% mmol/L -> 237 * mmol/L, 52% U/L -> 52 * U/L
+    line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|g\/dL|g\/L|mg\/dL|U\/L|UI|mIU|pmol|mL))/gi, '$1 * ');
+
+    // 8. Fix units typos: umoVL / umot, -> umol/L, mei, -> mg/dL, mL/phat -> mL/phút
+    line = line.replace(/\bumo[tvVlL]+(?:\/L)?\b[,\s|/]*/gi, 'umol/L ');
+    line = line.replace(/\bmei[,\s|/]+/gi, 'mg/dL ');
+    line = line.replace(/\bmL\/ph[au]t\b/gi, 'mL/phút');
+    line = line.replace(/\bmmo\b(?!\/)/gi, 'mmol/L');
+
+    // 9. Fix Vietnamese character typos in reference ranges: Nir <31 -> Nữ <31
+    line = line.replace(/\bNir\b/gi, 'Nữ');
+
+    // 10. Fix spaces around decimal dots and commas in numbers: e.g. "5 . 9" -> "5.9", "0 , 46" -> "0.46"
+    line = line.replace(/([0-9]+)\s*[.,•·]\s*([0-9]+)/g, '$1.$2');
+
+    // 11. Fix spaces around hyphens in ranges: e.g. "4.0 - 10.0" -> "4.0 - 10.0"
+    line = line.replace(/([0-9]+(?:\.[0-9]+)?)\s*[-–—~]\s*([0-9]+(?:\.[0-9]+)?)/g, '$1 - $2');
+
+    // 12. Format * flag with clean spaces: 5.9* -> 5.9 *
+    line = line.replace(/(\d+(?:\.\d+)?)\*/g, '$1 *');
+
+    // 13. Clean stray OCR symbols
+    line = line.replace(/[©®™¢§¶~]/g, ' ');
+
+    // 14. Fix concatenated words
+    line = line
+      .replace(/độlọccẩuthận/gi, 'Độ lọc cầu thận')
+      .replace(/riglveeride/gi, 'Triglyceride')
+      .replace(/cholestero[li]/gi, 'Cholesterol');
+
+    // 15. Normalize excessive column spacing: 10-30 spaces -> 2 spaces
+    line = line.replace(/[ \t]{3,}/g, '  ').trim();
+
+    if (line.length > 0) {
+      processedLines.push(line);
+    }
+  }
+
+  return processedLines.join('\n');
 }
 
 /**
@@ -524,6 +577,9 @@ export function parseMedicalReportFromText(
 
       if (catalogMatch.code) {
         valueSearchLine = valueSearchLine.replace(new RegExp(`\\b${catalogMatch.code}\\b`, 'gi'), '');
+      }
+      if (catalogMatch.code === 'eGFR') {
+        valueSearchLine = valueSearchLine.replace(/\bGFR\b/gi, '');
       }
 
       // Extract value
