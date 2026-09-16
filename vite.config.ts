@@ -69,6 +69,9 @@ export default defineConfig(() => {
           return code.replace(
             "let oemCurrent = 2;",
             "let oemCurrent = 1; // Patched for local tessdata_best/fast LSTM-only assets."
+          ).replace(
+            "legacyCore: true,\n  legacyLang: true,",
+            "legacyCore: false,\n  legacyLang: false,"
           );
         },
         renderChunk(code, chunk) {
@@ -78,6 +81,14 @@ export default defineConfig(() => {
             .replace(
               "let oemCurrent = 2;",
               "let oemCurrent = 1; // Patched for local tessdata_best/fast LSTM-only assets."
+            )
+            .replace(
+              "legacyCore: true,\n  legacyLang: true,",
+              "legacyCore: false,\n  legacyLang: false,"
+            )
+            .replace(
+              /legacyCore:!0,legacyLang:!0,workerBlobURL:!1/,
+              "legacyCore:!1,legacyLang:!1,workerBlobURL:!1"
             )
             .replace(
               /(let\s+[\w$]+\s*=\s*)2(\s*,\s*[\w$]+\s*=\s*\["eng"\]\s*,\s*[\w$]+\s*=\s*!1\s*;)/,
@@ -109,6 +120,14 @@ export default defineConfig(() => {
             .replace(
               "let oemCurrent = 2;",
               "let oemCurrent = 1; // Patched for local tessdata_best/fast LSTM-only assets."
+            )
+            .replace(
+              "legacyCore: true,\n  legacyLang: true,",
+              "legacyCore: false,\n  legacyLang: false,"
+            )
+            .replace(
+              /legacyCore:!0,legacyLang:!0,workerBlobURL:!1/,
+              "legacyCore:!1,legacyLang:!1,workerBlobURL:!1"
             )
             .replace(
               /(let\s+[\w$]+\s*=\s*)2(\s*,\s*[\w$]+\s*=\s*\["eng"\]\s*,\s*[\w$]+\s*=\s*!1\s*;)/,
