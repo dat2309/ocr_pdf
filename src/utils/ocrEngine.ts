@@ -1313,7 +1313,13 @@ export async function processMedicalFile(
     } catch (err: any) {
       console.warn('Scribe.js OCR error:', err);
       if (engine === 'scribe') {
-        throw new Error(`Scribe.js OCR không thể đọc tập tin: ${err?.message || err}`);
+        onProgress?.({
+          message: 'Scribe.js không khởi động được, đang chuyển sang Tesseract.js local...',
+          progress: 60,
+        });
+        if (!tesseractRawText && !isPdf) {
+          tesseractRawText = await extractTextFromImage(file, onProgress, abortSignal);
+        }
       }
     }
   }
