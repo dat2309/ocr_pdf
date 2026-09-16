@@ -22,6 +22,16 @@ export default defineConfig(() => {
     },
     worker: {
       format: 'es',
+      rollupOptions: {
+        output: {
+          entryFileNames: (chunkInfo) => {
+            if (chunkInfo.name === 'index') {
+              return 'assets/worker-index.js';
+            }
+            return 'assets/[name].js';
+          },
+        },
+      },
     },
     build: {
       target: 'esnext',
@@ -30,10 +40,18 @@ export default defineConfig(() => {
       rollupOptions: {
         output: {
           entryFileNames: "assets/index.js",
-          chunkFileNames: "assets/[name].js",
+          chunkFileNames: (chunkInfo) => {
+            if (chunkInfo.name === 'index') {
+              return 'assets/app-[name].js';
+            }
+            return 'assets/[name].js';
+          },
           assetFileNames: (assetInfo) => {
             if (assetInfo.names?.some((name) => name.endsWith(".css"))) {
               return "assets/index.css";
+            }
+            if (assetInfo.names?.some((name) => name.endsWith(".js") || name.endsWith(".mjs"))) {
+              return "assets/raw-[name][extname]";
             }
             return "assets/[name][extname]";
           },

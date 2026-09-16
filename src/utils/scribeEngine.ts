@@ -18,11 +18,24 @@ export async function extractTextWithScribe(
   onProgress?.({ message: 'Khởi chạy Scribe.js OCR...', progress: 10 });
 
   // Resolve base URL properly for GitHub Pages or nested subpaths
-  let localTessdataPath: string | null = null;
   if (typeof window !== 'undefined') {
-    const baseHref = new URL('.', window.location.href).href.replace(/\/+$/, '') + '/';
-    localTessdataPath = `${baseHref}tessdata`;
-    scribe.opt.langPath = localTessdataPath;
+    let tessdataPath: string;
+    try {
+      // In production, scribeEngine is bundled into assets/scribeEngine.js
+      // ../tessdata points directly to the app's tessdata directory
+      tessdataPath = new URL('../tessdata', import.meta.url).href;
+    } catch {
+      let pathname = window.location.pathname;
+      if (!pathname.endsWith('/')) {
+        if (!pathname.split('/').pop()?.includes('.')) {
+          pathname += '/';
+        } else {
+          pathname = pathname.substring(0, pathname.lastIndexOf('/') + 1);
+        }
+      }
+      tessdataPath = new URL('tessdata', `${window.location.origin}${pathname}`).href;
+    }
+    scribe.opt.langPath = tessdataPath.replace(/\/+$/, '');
   }
 
   // Convert blob/file if needed
