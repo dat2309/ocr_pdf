@@ -17,25 +17,14 @@ export async function extractTextWithScribe(
 
   onProgress?.({ message: 'Khởi chạy Scribe.js OCR...', progress: 10 });
 
-  // Resolve base URL properly for GitHub Pages or nested subpaths
+  // Resolve base URL properly for GitHub Pages, Vite dev, and nested subpaths.
+  // document.baseURI follows the <base>/current page path, while import.meta.url
+  // points at the bundled chunk under assets/.
   if (typeof window !== 'undefined') {
-    let tessdataPath: string;
-    try {
-      // In production, scribeEngine is bundled into assets/scribeEngine.js
-      // ../tessdata points directly to the app's tessdata directory
-      tessdataPath = new URL('../tessdata', import.meta.url).href;
-    } catch {
-      let pathname = window.location.pathname;
-      if (!pathname.endsWith('/')) {
-        if (!pathname.split('/').pop()?.includes('.')) {
-          pathname += '/';
-        } else {
-          pathname = pathname.substring(0, pathname.lastIndexOf('/') + 1);
-        }
-      }
-      tessdataPath = new URL('tessdata', `${window.location.origin}${pathname}`).href;
-    }
+    const tessdataPath = new URL('tessdata/', document.baseURI || window.location.href).href;
     scribe.opt.langPath = tessdataPath.replace(/\/+$/, '');
+    scribe.opt.workerN = 1;
+    scribe.opt.inProcess = true;
   }
 
   // Convert blob/file if needed
@@ -48,23 +37,35 @@ export async function extractTextWithScribe(
 
   onProgress?.({ message: 'Scribe.js đang phân tích tài liệu...', progress: 35 });
 
+  let doc: any = null;
   try {
-    const text = await scribe.extractText([input], langs, 'txt');
+    doc = await scribe.openDocument([input]);
+    onProgress?.({ message: 'Scribe.js đang nhận diện bằng Tesseract LSTM...', progress: 50 });
+    await doc.recognize({
+      langs,
+      vanillaMode: true,
+      modeAdv: 'lstm',
+      ocrPages: 'all',
+      config: {
+        tessedit_pageseg_mode: '3',
+        preserve_interword_spaces: '1',
+        user_defined_dpi: '300',
+      },
+    });
+    const text = await doc.exportData('txt');
     onProgress?.({ message: 'Scribe.js hoàn tất!', progress: 100 });
     return typeof text === 'string' ? text.trim() : String(text || '').trim();
   } catch (err: any) {
-    console.warn('Scribe.js OCR failed with local tessdata path, trying fallback CDN...', err);
-
-    // Fallback: If local traineddata fetch fails (404/CORS), allow Scribe to fetch from jsdelivr CDN
-    try {
-      scribe.opt.langPath = null;
-      onProgress?.({ message: 'Đang thử lại Scribe.js với CDN...', progress: 50 });
-      const fallbackText = await scribe.extractText([input], langs, 'txt');
-      onProgress?.({ message: 'Scribe.js hoàn tất!', progress: 100 });
-      return typeof fallbackText === 'string' ? fallbackText.trim() : String(fallbackText || '').trim();
-    } catch (fallbackErr: any) {
-      console.error('Scribe.js OCR fallback error:', fallbackErr);
-      throw new Error(`Scribe.js OCR thất bại: ${err?.message || fallbackErr?.message || err}`);
+    console.warn('Scribe.js OCR failed with local tessdata path:', err);
+    throw new Error(`Scribe.js OCR thất bại: ${err?.message || err}`);
+  } finally {
+    if (doc) {
+      try {
+        await doc.close();
+      } catch {
+        // Ignore cleanup errors.
+      }
     }
+    await scribe.terminate().catch(() => {});
   }
 }
