@@ -26,7 +26,7 @@ export const FILE_LIMITS = {
 };
 
 export const DEFAULT_OCR_CONFIG = {
-  psm: PSM.AUTO,
+  psm: PSM.SINGLE_BLOCK, // PSM 6: Uniform single block - preserves horizontal table row structure across columns
   preserveInterwordSpaces: '1',
   userDefinedDpi: '300', // Metadata only for Tesseract
   languages: ['vie', 'eng'] as const,
@@ -578,11 +578,13 @@ export async function preprocessImageForOcr(
     if (!origW || !origH) return imageSource;
 
     // Keep natural aspect ratio! NEVER force wide images into portrait frames.
+    // Tesseract LSTM works best when character height (x-height) is ~28-35px.
+    // Target optimal document width of ~2800-3000px while respecting system memory caps.
     let scale = 1.0;
-    if (origW < 1600) {
-      scale = Math.min(2.5, 2200 / origW);
-    } else if (origW > 3200) {
-      scale = 2600 / origW;
+    if (origW < 2800) {
+      scale = Math.min(2.5, 3000 / origW);
+    } else if (origW > 3600) {
+      scale = 3200 / origW;
     }
 
     let targetW = Math.round(origW * scale);
@@ -620,51 +622,103 @@ export async function preprocessImageForOcr(
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, padding, padding, targetW, targetH);
 
-    // Grayscale and robust contrast normalization
+    // Adaptive local illumination normalization (flattens shadows & background gradients)
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
-    const len = data.length;
 
-    const sampleStep = 8;
-    const hist = new Uint32Array(256);
-    let sampleCount = 0;
-
-    for (let y = padding; y < canvas.height - padding; y += sampleStep) {
-      for (let x = padding; x < canvas.width - padding; x += sampleStep) {
-        const i = (y * canvas.width + x) * 4;
-        const lum = Math.round((data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000);
-        hist[Math.max(0, Math.min(255, lum))]++;
-        sampleCount++;
-      }
-    }
-
-    const lowLum = percentileFromHistogram(hist, sampleCount, 0.015);
-    const highLum = percentileFromHistogram(hist, sampleCount, 0.985);
-    const range = Math.max(highLum - lowLum, 60);
-
-    for (let i = 0; i < len; i += 4) {
-      const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-      let stretched = ((lum - lowLum) / range) * 255;
-      stretched = Math.max(0, Math.min(255, stretched));
-
-      // Controlled whitening: clean light paper background (> 238) to white,
-      // but DO NOT crush midtones (100-230) so small decimal dots and diacritics are safe!
-      if (stretched > 238) {
-        stretched = 255;
-      } else if (stretched < 50) {
-        stretched = Math.max(0, stretched * 0.85);
-      }
-      data[i] = stretched;
-      data[i + 1] = stretched;
-      data[i + 2] = stretched;
-    }
-
+    normalizeLocalIllumination(data, canvas.width, canvas.height, padding);
     sharpenGrayscaleImageControlled(data, canvas.width, canvas.height, padding, padding, canvas.width - padding, canvas.height - padding);
     ctx.putImageData(imgData, 0, 0);
     return canvas;
   } catch (err) {
     console.warn('Canvas preprocessing skipped due to error, falling back to original source:', err);
     return imageSource;
+  }
+}
+
+/**
+ * Fast adaptive local background division (illumination flattening):
+ * Samples the background luminance across local tiles, then divides pixel luminance
+ * by the local background surface to eliminate shadows, dark corners, and gradients.
+ * Preserves grayscale anti-aliasing without binarization or loss of faint decimal dots.
+ */
+export function normalizeLocalIllumination(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  padding: number = 0
+): void {
+  const innerW = width - padding * 2;
+  const innerH = height - padding * 2;
+  if (innerW < 50 || innerH < 50) return;
+
+  const tileSize = 48;
+  const gridW = Math.ceil(innerW / tileSize);
+  const gridH = Math.ceil(innerH / tileSize);
+  const bgGrid = new Float32Array(gridW * gridH);
+
+  // 1. Calculate local background luminance (90th percentile of local tile)
+  for (let gy = 0; gy < gridH; gy++) {
+    const y0 = padding + gy * tileSize;
+    const y1 = Math.min(height - padding, y0 + tileSize);
+
+    for (let gx = 0; gx < gridW; gx++) {
+      const x0 = padding + gx * tileSize;
+      const x1 = Math.min(width - padding, x0 + tileSize);
+
+      const hist = new Uint16Array(256);
+      let count = 0;
+      for (let y = y0; y < y1; y += 4) {
+        for (let x = x0; x < x1; x += 4) {
+          const idx = (y * width + x) * 4;
+          const lum = Math.round((data[idx] * 299 + data[idx + 1] * 587 + data[idx + 2] * 114) / 1000);
+          hist[Math.max(0, Math.min(255, lum))]++;
+          count++;
+        }
+      }
+
+      // Target 90th percentile for paper background
+      const target = Math.max(1, Math.round(count * 0.90));
+      let bgVal = 215;
+      let running = 0;
+      for (let k = 0; k < 256; k++) {
+        running += hist[k];
+        if (running >= target) {
+          bgVal = k;
+          break;
+        }
+      }
+      bgGrid[gy * gridW + gx] = Math.max(bgVal, 30);
+    }
+  }
+
+  // 2. Normalize each pixel by dividing by local interpolated background
+  for (let y = padding; y < height - padding; y++) {
+    const gy = Math.min(gridH - 1, Math.floor((y - padding) / tileSize));
+    const rowIdx = gy * gridW;
+
+    for (let x = padding; x < width - padding; x++) {
+      const gx = Math.min(gridW - 1, Math.floor((x - padding) / tileSize));
+      const bg = bgGrid[rowIdx + gx];
+      const i = (y * width + x) * 4;
+      const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+
+      // Divide by local background and scale to near-white (245)
+      let normalized = (lum / bg) * 245;
+
+      // Controlled whitening: clean paper background (> 238) to white,
+      // slightly boost deep ink (< 50), preserve midtones (100-230) for dots/accents
+      if (normalized > 238) {
+        normalized = 255;
+      } else if (normalized < 50) {
+        normalized = Math.max(0, normalized * 0.85);
+      }
+
+      const finalVal = Math.max(0, Math.min(255, Math.round(normalized)));
+      data[i] = finalVal;
+      data[i + 1] = finalVal;
+      data[i + 2] = finalVal;
+    }
   }
 }
 

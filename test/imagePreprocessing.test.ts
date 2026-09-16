@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { FILE_LIMITS } from '../src/utils/ocrEngine';
+import { FILE_LIMITS, normalizeLocalIllumination } from '../src/utils/ocrEngine';
 
 describe('Image Preprocessing & Aspect Ratio & Limits', () => {
   // Case 7: Ảnh ngang - không ép ảnh ngang vào canvas trang dọc
@@ -11,10 +11,10 @@ describe('Image Preprocessing & Aspect Ratio & Limits', () => {
 
     // Logic tính toán kích thước trong ocrEngine.ts
     let scale = 1.0;
-    if (origW < 1600) {
-      scale = Math.min(2.5, 2200 / origW);
-    } else if (origW > 3200) {
-      scale = 2600 / origW;
+    if (origW < 2800) {
+      scale = Math.min(2.5, 3000 / origW);
+    } else if (origW > 3600) {
+      scale = 3200 / origW;
     }
 
     let targetW = Math.round(origW * scale);
@@ -36,8 +36,8 @@ describe('Image Preprocessing & Aspect Ratio & Limits', () => {
     const aspectRatio = origW / origH; // 0.5 (dọc)
 
     let scale = 1.0;
-    if (origW < 1600) {
-      scale = Math.min(2.5, 2200 / origW);
+    if (origW < 2800) {
+      scale = Math.min(2.5, 3000 / origW);
     }
 
     const targetW = Math.round(origW * scale);
@@ -48,18 +48,18 @@ describe('Image Preprocessing & Aspect Ratio & Limits', () => {
     assert.ok(targetH > targetW, 'Chiều cao lớn hơn chiều rộng');
   });
 
-  // Case 9: Ảnh độ phân giải thấp - upscale có kiểm soát
-  it('Trường hợp 9: Ảnh độ phân giải thấp (width < 1600) được upscale để chữ rõ nét', () => {
-    const lowResW = 800;
-    const lowResH = 1000;
+  // Case 9: Ảnh độ phân giải thấp - upscale có kiểm soát đến vùng tối ưu 2800-3000px
+  it('Trường hợp 9: Ảnh độ phân giải thấp (width < 2800) được upscale để chữ rõ nét', () => {
+    const lowResW = 1200;
+    const lowResH = 1500;
 
-    const scale = Math.min(2.5, 2200 / lowResW); // 2200 / 800 = 2.5 (căn cứ 2200px)
+    const scale = Math.min(2.5, 3000 / lowResW); // 3000 / 1200 = 2.5
     const targetW = Math.round(lowResW * scale);
     const targetH = Math.round(lowResH * scale);
 
-    assert.ok(targetW >= 1800, `Ảnh nhỏ phải được upscale lên vùng đọc tốt, thực tế: ${targetW}`);
-    assert.equal(targetW, 2000);
-    assert.equal(targetH, 2500);
+    assert.ok(targetW >= 2400, `Ảnh nhỏ phải được upscale lên vùng đọc tốt (~2800-3000px), thực tế: ${targetW}`);
+    assert.equal(targetW, 3000);
+    assert.equal(targetH, 3750);
   });
 
   // Case 10: Ảnh bị xoay theo EXIF - kiểm tra hằng số và hỗ trợ định hướng
@@ -135,5 +135,45 @@ describe('Image Preprocessing & Aspect Ratio & Limits', () => {
     assert.ok(hugeW <= FILE_LIMITS.maxCanvasDimension, 'Width không vượt 4096');
     assert.ok(hugeH <= FILE_LIMITS.maxCanvasDimension, 'Height không vượt 4096');
     assert.ok(hugeW * hugeH <= FILE_LIMITS.maxCanvasPixels, 'Total pixels không vượt 10 Megapixels');
+  });
+
+  // Case 21: Chuẩn hóa sáng cục bộ (local illumination normalization) loại bỏ bóng đổ
+  it('Trường hợp 21: Chuẩn hóa sáng cục bộ làm trắng nền ở cả vùng sáng và vùng đổ bóng', () => {
+    // Tạo buffer ảnh RGBA 100x100: nửa trái sáng (bg = 220), nửa phải có bóng tối (bg = 120)
+    const w = 100;
+    const h = 100;
+    const data = new Uint8ClampedArray(w * h * 4);
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const isLeft = x < 50;
+        const bgVal = isLeft ? 220 : 120; // nửa phải bị bóng tối
+        // Đặt mực in tại điểm (20, 20) và (70, 20)
+        const isInk = (x === 20 && y === 20) || (x === 70 && y === 20);
+        const lum = isInk ? 30 : bgVal;
+
+        data[i] = lum;
+        data[i + 1] = lum;
+        data[i + 2] = lum;
+        data[i + 3] = 255;
+      }
+    }
+
+    // Chạy normalizeLocalIllumination
+    normalizeLocalIllumination(data, w, h, 0);
+
+    // Kiểm tra pixel nền ở vùng sáng (x=10, y=10) và vùng bóng tối (x=80, y=10)
+    const leftBgIdx = (10 * w + 10) * 4;
+    const rightBgIdx = (10 * w + 80) * 4;
+
+    assert.equal(data[leftBgIdx], 255, 'Nền giấy vùng sáng được làm trắng');
+    assert.ok(data[rightBgIdx] >= 240, `Nền giấy vùng bóng tối (${data[rightBgIdx]}) phải được nâng lên màu trắng`);
+
+    // Kiểm tra mực in ở vùng sáng và vùng tối vẫn sắc nét, không bị bay màu
+    const leftInkIdx = (20 * w + 20) * 4;
+    const rightInkIdx = (20 * w + 70) * 4;
+    assert.ok(data[leftInkIdx] < 60, 'Mực in vùng sáng giữ nguyên độ đậm');
+    assert.ok(data[rightInkIdx] < 90, 'Mực in vùng bóng tối không bị biến thành trắng');
   });
 });

@@ -299,6 +299,12 @@ export function cleanOcrArtifacts(rawText: string): string {
     line = line.replace(/\\(?=\*)/g, '');
     line = line.replace(/^[.„~_|\s]*\b(?=Glucose|Creatinine|Cholesterol|HDL|Non|LDL|Triglyceride|eGFR|GFR)/i, '. ');
 
+    // 2b. Fix OCR corrupted lab test names:
+    // e.g. "Crontiting" / "Cirediinine" -> "Creatinine", "Do hoạt độ GGT" / "Po hoạt độ GGT" -> "Đo hoạt độ GGT"
+    line = line.replace(/\b(?:Crontiting|Cirediinine)\b/gi, 'Creatinine');
+    line = line.replace(/[DP]o\s*hoạt\s*độ\s*GGT/gi, 'Đo hoạt độ GGT');
+    line = line.replace(/„\s*Creatinine/gi, '. Creatinine');
+
     // 3. Fix eGFR prefix when "e" was dropped by OCR: . GFR (CKD-EPI -> . eGFR (CKD-EPI
     line = line.replace(/\b(?:\.?\s*)GFR\s*\(/gi, 'eGFR (');
 
@@ -309,14 +315,26 @@ export function cleanOcrArtifacts(rawText: string): string {
     line = line.replace(/\bNem\s*:/gi, 'Nam:');
 
     // 7. Fix % misread from * flag before medical units: 237% mmol/L -> 237 * mmol/L, 52% U/L -> 52 * U/L
-    line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|g\/dL|g\/L|mg\/dL|U\/L|UI|mIU|pmol|mL))/gi, '$1 * ');
+    line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|amor|g\/dL|g\/L|mg\/dL|mgd|U\/L|UA|UI|mIU|pmol|mL))/gi, '$1 * ');
 
-    // 8. Fix units typos: umoVL / umot, -> umol/L, mei, -> mg/dL, mL/phat -> mL/phút
-    line = line.replace(/\bumo[tvVlL]+(?:\/L)?\b[,\s|/]*/gi, 'µmol/L ');
-    line = line.replace(/\bmgd\b/gi, 'mg/dL');
-    line = line.replace(/\bmei[,\s|/]+/gi, 'mg/dL ');
-    line = line.replace(/\bmL\/ph[au]t\b/gi, 'mL/phút');
+    // 8. Fix units typos:
+    // First preserve mL/phút / mL/min (do NOT confuse with mg/dL)
+    line = line.replace(/\bm[lL]\/(?:ph[au]t|min)\b/gi, 'mL/phút');
+
+    // Unit typos: umoVL / umot, / amor -> umol/L, mgd, / mei, / ml, / m2, -> mg/dL, UA -> U/L
+    line = line.replace(/\b(?:umo[tvVlLyY]+|amor)(?:\/L)?\b[,\s|/]*/gi, 'µmol/L ');
+    line = line.replace(/\b(?:mldl|mgld|mgdl|mgd|mei)[,\s|/]+|\b(?:ml|m2),\s*/gi, 'mg/dL ');
+    line = line.replace(/\bUA\b/gi, 'U/L');
     line = line.replace(/\bmmo\b(?!\/)/gi, 'mmol/L');
+
+    // 8b. Fix OCR digit typos before medical units: S2 U/L -> 52 U/L, O.74 -> 0.74, l06 -> 106
+    line = line.replace(/\bS([0-9]+(?:\.[0-9]+)?)\s*(?=(?:U\/L|UA|mmol|mg\/dL|µmol))/gi, '5$1 ');
+    line = line.replace(/\bO([0-9]*\.[0-9]+)\s*(?=(?:U\/L|UA|mmol|mg\/dL|µmol))/gi, '0$1 ');
+    line = line.replace(/\b[lI]([0-9]{2,}(?:\.[0-9]+)?)\s*(?=(?:U\/L|UA|mmol|mg\/dL|µmol))/gi, '1$1 ');
+
+    // 8c. Remove table delimiters and fix procedure code typos:
+    line = line.replace(/\s*\|\s*/g, '  ');
+    line = line.replace(/\bSHQTKT\b/gi, 'SH/QTKT');
 
     // 9. Fix Vietnamese character typos in reference ranges: Nir <31 -> Nữ <31
     line = line.replace(/\bNir\b/gi, 'Nữ');
@@ -673,19 +691,24 @@ export function parseMedicalReportFromText(
       }
 
       if (testVal) {
+        const evalRes = evaluateStatus(testVal, testRefRange, explicitFlag, patient.gender);
+
+        // Effective reference range: prefer extracted evalRes min/max if available;
+        // only fall back to catalog defaults if unit matches catalog default unit.
+        const effectiveRefMin = evalRes.refMin ?? (catalogMatch.defaultUnit === testUnit ? catalogMatch.defaultRefMin : undefined);
+        const effectiveRefMax = evalRes.refMax ?? (catalogMatch.defaultUnit === testUnit ? catalogMatch.defaultRefMax : undefined);
+
         // Check for suspicious missing decimal points WITHOUT modifying the raw number
         const check = checkSuspiciousValue(
           catalogMatch.code,
           testVal,
           testUnit,
           testRefRange,
-          catalogMatch.defaultRefMin,
-          catalogMatch.defaultRefMax
+          effectiveRefMin,
+          effectiveRefMax
         );
 
-        const evalRes = evaluateStatus(testVal, testRefRange, explicitFlag, patient.gender);
         processedCodes.add(primaryUnitKey);
-        processedCodes.add(catalogMatch.code);
 
         const needsReview = check.isSuspicious || evalRes.needsReview || check.confidence < 60;
         const warning = check.warning || evalRes.warning;

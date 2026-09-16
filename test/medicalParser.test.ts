@@ -259,4 +259,96 @@ describe('Medical Parser & Clinical Safety Rules', () => {
     assert.equal(ggt.value, '52');
     assert.equal(ggt.status, 'high');
   });
+
+  // Case 22: Bóc tách toàn diện 22 chỉ số từ phiếu sinh hóa OCR thực tế
+  it('Trường hợp 22: Bóc tách chính xác 22 chỉ số từ dữ liệu OCR ảnh thực tế (sửa S2 -> 52, 0.74 ml, -> 0.74 mg/dL, cờ * từ %)', () => {
+    const realImageOcrText = `
+(Test)                                      (Results)              (Units)               (Ref. ranges)                (Procedure)
+XN SINH HÓA
+(BIOCHEMISTRY)
+Glucose                                                              5.9*              mmol/L            3.9- 5.6 mmol/L          SH/QTKT-17**
+. Glucose                                                       106 *              mg/dL              70-101 mg/dL
+Crontiting                                                                      65.1                  amor, | NERT4- 14: Nữ 5S 961 orgy. aes
+umol/L
+„ Creatinine                                                                  0.74                 mgd, | NEE 08 ig 066-| cr/QTKT-03**
+.  eGFR (CKD-EPI 2021)                                             96                 mL/phút           >= 60 ml/ph/1.73 m2
+Cholesterol                                                                  4.94                mmol/L               3.9-5.2mmol/L             SH/QTKT-05**
+. Cholesterol                                                          191                 mg/dL               150- 200 mg/dL           SH/QTKT-05**
+HDL Cholesterol                                                            1.38                 mmol/L                >0.9mmol/L              SH/QTKT-06**
+. HDL Cholesterol                                                 53                 mg/dL                 > 35 mg/dL              SH/QTKT-06**
+Non - HDL Cholesterol                                                 3.56                mmol/L                   mmol/L
+.  Non- HDL Cholesterol                                            137.5                 mg/dL                      mg/dL
+LDL Cholesterol                                                           3.13                mmol/L                <3.4 mmol/L              SH/QTKT-21**
+. LDL Cholesterol                                              121               mg/dL               < 131 mg/dL
+Triglyceride                                                          237 *              mmol/L            0.46-1.88 mmol/L          SH/QTKT-23**
+. Triglyceride                                                     210 *               mg/dL               40-166 mg/dL
+GOT/ASAT                                                                     23                     U/L         Nam <40 U/L; Nữ <31 U/L| SH/QTKT-07**
+GPT/ALAT                                                          19                 U/L        Nam <41 U/L; Nữ <31 U/L| SH/QTKT-08**
+Đo hoạt độ GGT                                                            52%                   U/L                      <40 U/L                 SH/QTKT-09**
+Natri                                                                             140                 mmol/L             136 — 146 mmol/L            SH/QTKT-27
+Kali                                                                                  4.11                  mmol/L               3.4 —5.1 mmol/L              SH/QTKT-27
+Định lượng Clo                                                              106                 mmol/L              98 — 109 mmol/L             SH/QTKT-27
+Định lượng Calci toàn phần                                                 2.35                  mmol/L             2.10 — 2.55 mmol/L          SHQTKT-18**
+    `;
+
+    const parsed = parseMedicalReportFromText(realImageOcrText, 'real_image.jpg');
+    const tests = parsed.tests || [];
+
+    assert.equal(tests.length, 22, 'Phải bóc tách đủ 22 chỉ số từ ảnh');
+
+    // Glucose 2 đơn vị
+    const gluMmol = tests.find((t) => t.code === 'GLU' && t.unit === 'mmol/L');
+    assert.ok(gluMmol);
+    assert.equal(gluMmol.value, '5.9');
+    assert.equal(gluMmol.status, 'high');
+
+    const gluMg = tests.find((t) => t.code === 'GLU' && t.unit === 'mg/dL');
+    assert.ok(gluMg);
+    assert.equal(gluMg.value, '106');
+    assert.equal(gluMg.status, 'high');
+
+    // Creatinine 2 đơn vị
+    const creaUmol = tests.find((t) => t.code === 'CREA' && t.unit === 'µmol/L');
+    assert.ok(creaUmol);
+    assert.equal(creaUmol.value, '65.1');
+
+    const creaMg = tests.find((t) => t.code === 'CREA' && t.unit === 'mg/dL');
+    assert.ok(creaMg);
+    assert.equal(creaMg.value, '0.74');
+
+    // eGFR
+    const egfr = tests.find((t) => t.code === 'eGFR');
+    assert.ok(egfr);
+    assert.equal(egfr.value, '96');
+    assert.equal(egfr.unit, 'mL/phút');
+
+    // GGT (sửa từ 52%)
+    const ggt = tests.find((t) => t.code === 'GGT');
+    assert.ok(ggt);
+    assert.equal(ggt.value, '52');
+    assert.equal(ggt.status, 'high');
+
+    // Triglyceride nghi ngờ mất dấu thập phân
+    const trigMmol = tests.find((t) => t.code === 'TRIG' && t.unit === 'mmol/L');
+    assert.ok(trigMmol);
+    assert.equal(trigMmol.value, '237');
+    assert.equal(trigMmol.needsReview, true, 'Giá trị 237 mmol/L phải được cắm cờ needsReview');
+
+    // Điện giải
+    const na = tests.find((t) => t.code === 'Na');
+    assert.ok(na);
+    assert.equal(na.value, '140');
+
+    const k = tests.find((t) => t.code === 'K');
+    assert.ok(k);
+    assert.equal(k.value, '4.11');
+
+    const cl = tests.find((t) => t.code === 'Cl');
+    assert.ok(cl);
+    assert.equal(cl.value, '106');
+
+    const ca = tests.find((t) => t.code === 'Ca');
+    assert.ok(ca);
+    assert.equal(ca.value, '2.35');
+  });
 });
