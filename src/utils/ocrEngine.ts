@@ -1,6 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { createWorker, PSM } from 'tesseract.js';
-import { LabReport } from '../types';
+import { LabReport, OcrEngineType } from '../types';
 import { parseMedicalReportFromText } from './medicalParser';
 
 // Configure PDF.js worker locally using Vite asset resolution (offline-first, no CDN dependency)
@@ -627,8 +627,7 @@ export async function preprocessImageForOcr(
     const data = imgData.data;
 
     normalizeLocalIllumination(data, canvas.width, canvas.height, padding);
-    const lineInfo = suppressTableGridLines(data, canvas.width, canvas.height, padding);
-    (canvas as any).__tableDividers = lineInfo.verticalDividerCols;
+    suppressTableGridLines(data, canvas.width, canvas.height, padding);
     sharpenGrayscaleImageControlled(data, canvas.width, canvas.height, padding, padding, canvas.width - padding, canvas.height - padding);
     ctx.putImageData(imgData, 0, 0);
     return canvas;
@@ -961,35 +960,6 @@ export async function extractTextFromImage(
 
       activeOcrProgress = onProgress;
 
-      // 1. If table dividers were detected on the Canvas, run table-aware column OCR
-      const tableDividers =
-        (typeof HTMLCanvasElement !== 'undefined' &&
-          processedSource instanceof HTMLCanvasElement &&
-          (processedSource as any).__tableDividers) ||
-        [];
-
-      if (Array.isArray(tableDividers) && tableDividers.length >= 3) {
-        try {
-          const tableText = await runTableAwareOcr(
-            processedSource as HTMLCanvasElement,
-            tableDividers,
-            onProgress,
-            abortSignal
-          );
-          if (tableText && tableText.length > 50) {
-            return {
-              data: {
-                text: tableText,
-                tsv: '',
-              },
-            } as any;
-          }
-        } catch (err: any) {
-          if (err?.name === 'AbortError') throw err;
-          console.warn('Table-aware column OCR fallback to standard OCR:', err);
-        }
-      }
-
       let result: Awaited<ReturnType<typeof runOcrPass>>;
       try {
         result = await runOcrPass(processedSource, onProgress, abortSignal);
@@ -1049,175 +1019,7 @@ async function runOcrPass(
   }
 }
 
-function cropCanvas(source: HTMLCanvasElement, x: number, y: number, w: number, h: number): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, w);
-  canvas.height = Math.max(1, h);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (ctx) {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(source, x, y, w, h, 0, 0, w, h);
-  }
-  return canvas;
-}
 
-/**
- * Upscale a canvas by an integer factor using nearest-neighbour / high-quality
- * browser scaling. Returns a NEW canvas; caller must dispose the original.
- */
-function upscaleCanvas(source: HTMLCanvasElement, scale: number): HTMLCanvasElement {
-  if (scale <= 1) return source;
-  const canvas = document.createElement('canvas');
-  canvas.width = source.width * scale;
-  canvas.height = source.height * scale;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (ctx) {
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(source, 0, 0, source.width, source.height, 0, 0, canvas.width, canvas.height);
-  }
-  return canvas;
-}
-
-function extractWordsFromTsv(
-  tsv: string | null | undefined,
-  offsetX: number,
-  offsetY: number,
-  colIdx: number,
-  /** Divide TSV pixel coords by this factor to map back to original canvas space */
-  coordScale: number = 1
-): Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }> {
-  if (!tsv) return [];
-  const words: Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }> = [];
-  const rows = tsv.split(/\r?\n/);
-  for (let i = 1; i < rows.length; i++) {
-    const cols = rows[i].split('\t');
-    if (cols.length < 12 || cols[0] !== '5') continue;
-    const text = cols.slice(11).join('\t').trim();
-    if (!text) continue;
-    const conf = Number(cols[10]);
-    words.push({
-      text,
-      confidence: Number.isFinite(conf) ? conf : 80,
-      colIdx,
-      x: offsetX + Math.round((Number(cols[6]) || 0) / coordScale),
-      y: offsetY + Math.round((Number(cols[7]) || 0) / coordScale),
-      w: Math.round((Number(cols[8]) || 0) / coordScale),
-      h: Math.round((Number(cols[9]) || 0) / coordScale),
-    });
-  }
-  return words;
-}
-
-async function runTableAwareOcr(
-  canvas: HTMLCanvasElement,
-  dividers: number[],
-  onProgress?: OcrProgressCallback,
-  abortSignal?: AbortSignal
-): Promise<string> {
-  const width = canvas.width;
-  const height = canvas.height;
-
-  // Build column boundaries from dividers
-  const allPoints = [...dividers];
-  if (allPoints[0] > 60) {
-    allPoints.unshift(16);
-  }
-  if (allPoints[allPoints.length - 1] < width - 60) {
-    allPoints.push(width - 16);
-  }
-
-  const columns: Array<{ left: number; width: number; index: number }> = [];
-  for (let i = 0; i < allPoints.length - 1; i++) {
-    const left = allPoints[i] + 3;
-    const right = allPoints[i + 1] - 3;
-    const colW = right - left;
-    if (colW >= 40) {
-      columns.push({ left, width: colW, index: columns.length });
-    }
-  }
-
-  if (columns.length < 3) {
-    return '';
-  }
-
-  const worker = await getLocalOcrWorker(onProgress, abortSignal);
-  if (abortSignal?.aborted) throw createAbortError('Tác vụ OCR đã bị hủy.');
-
-  const columnWords: Array<Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }>> = [];
-
-  for (let i = 0; i < columns.length; i++) {
-    if (abortSignal?.aborted) throw createAbortError('Tác vụ OCR đã bị hủy.');
-    const col = columns[i];
-    const colCanvas = cropCanvas(canvas, col.left, 0, col.width, height);
-
-    // Upscale 4x so that small decimal dots (e.g. "2.37") are not lost by Tesseract
-    const UPSCALE = 4;
-    const scaledCanvas = upscaleCanvas(colCanvas, UPSCALE);
-    disposeCanvas(colCanvas);
-
-    try {
-      onProgress?.({
-        message: `Đang nhận dạng cột bảng ${i + 1}/${columns.length}...`,
-        progress: Math.round(25 + (i / columns.length) * 60),
-      });
-
-      const res = await recognizeOcrVariant(worker, scaledCanvas);
-      // Pass coordScale=UPSCALE so TSV pixel coords map back to original canvas space
-      const words = extractWordsFromTsv(res.data.tsv, col.left, 0, i, UPSCALE);
-      columnWords.push(words);
-    } finally {
-      disposeCanvas(scaledCanvas);
-    }
-  }
-
-  // Row clustering: group words across all columns by Y proximity
-  const allWords = columnWords.flat().sort((a, b) => a.y - b.y);
-  if (allWords.length === 0) return '';
-
-  const rows: Array<{ avgY: number; words: typeof allWords }> = [];
-  for (const word of allWords) {
-    let matchedRow: (typeof rows)[0] | null = null;
-    for (const r of rows) {
-      if (Math.abs(r.avgY - word.y) <= 24) {
-        matchedRow = r;
-        break;
-      }
-    }
-    if (matchedRow) {
-      matchedRow.words.push(word);
-      matchedRow.avgY = matchedRow.words.reduce((s, w) => s + w.y, 0) / matchedRow.words.length;
-    } else {
-      rows.push({ avgY: word.y, words: [word] });
-    }
-  }
-
-  rows.sort((a, b) => a.avgY - b.avgY);
-
-  const reconstructedLines: string[] = [];
-  for (const r of rows) {
-    r.words.sort((a, b) => a.x - b.x);
-    const colTexts: string[] = new Array(columns.length).fill('');
-    for (const w of r.words) {
-      if (colTexts[w.colIdx]) colTexts[w.colIdx] += ' ' + w.text;
-      else colTexts[w.colIdx] = w.text;
-    }
-    const line = colTexts.filter((t) => t.trim()).join('    ');
-    if (line) {
-      // Merge continuation lines (sublines of multi-line cells)
-      if (/^(umol\/L|mg\/dL|[0-9.]+\s*mg\/dL|mL\/phút)/i.test(line) && reconstructedLines.length > 0) {
-        reconstructedLines[reconstructedLines.length - 1] += ' ' + line;
-      } else {
-        reconstructedLines.push(line);
-      }
-    }
-  }
-
-  return reconstructedLines.join('\n').trim();
-}
 
 async function runExclusiveOcr<T>(task: () => Promise<T>): Promise<T> {
   const run = ocrQueue.then(task, task);
@@ -1450,7 +1252,8 @@ export function reconstructTextFromTsv(tsv: string | null | undefined): string {
 export async function processMedicalFile(
   file: File,
   onProgress?: OcrProgressCallback,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  engine: OcrEngineType = 'tesseract'
 ): Promise<LabReport> {
   if (abortSignal?.aborted) {
     throw new DOMException('Tác vụ đọc file đã bị hủy.', 'AbortError');
@@ -1463,22 +1266,56 @@ export async function processMedicalFile(
   }
 
   const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-  let extractedText = '';
+  let tesseractRawText = '';
+  let scribeRawText = '';
   let previewDataUrl = '';
 
+  // 1. Tesseract / PDF.js pass
   if (isPdf) {
     onProgress?.({ message: 'Đang mở tập tin PDF bằng PDF.js...', progress: 5 });
     const { text, pageDataUrls } = await extractTextFromPdf(file, onProgress, abortSignal);
-    extractedText = text;
+    tesseractRawText = text;
     if (pageDataUrls.length > 0) {
       previewDataUrl = pageDataUrls[0];
     } else {
       previewDataUrl = await readFileAsDataUrl(file);
     }
   } else {
-    onProgress?.({ message: 'Đang tải hình ảnh và quét với Tesseract OCR...', progress: 10 });
     previewDataUrl = await readFileAsDataUrl(file);
-    extractedText = await extractTextFromImage(file, onProgress, abortSignal);
+    if (engine === 'tesseract' || engine === 'both') {
+      onProgress?.({ message: 'Đang chuẩn hóa ảnh và quét Tesseract OCR...', progress: 10 });
+      tesseractRawText = await extractTextFromImage(file, onProgress, abortSignal);
+    }
+  }
+
+  if (abortSignal?.aborted) {
+    throw new DOMException('Tác vụ đã bị hủy.', 'AbortError');
+  }
+
+  // 2. Scribe.js pass if requested
+  if (engine === 'scribe' || engine === 'both') {
+    onProgress?.({ message: 'Đang khởi động và nhận dạng bằng Scribe.js OCR...', progress: engine === 'both' ? 60 : 15 });
+    try {
+      const { extractTextWithScribe } = await import('./scribeEngine');
+      scribeRawText = await extractTextWithScribe(file, {
+        langs: ['vie', 'eng'],
+        onProgress: (info) => {
+          if (engine === 'both') {
+            onProgress?.({
+              message: `[Scribe.js] ${info.message}`,
+              progress: Math.min(95, Math.round(55 + (info.progress * 0.4))),
+            });
+          } else {
+            onProgress?.({ message: `[Scribe.js] ${info.message}`, progress: info.progress });
+          }
+        },
+      });
+    } catch (err: any) {
+      console.warn('Scribe.js OCR error:', err);
+      if (engine === 'scribe') {
+        throw new Error(`Scribe.js OCR không thể đọc tập tin: ${err?.message || err}`);
+      }
+    }
   }
 
   if (abortSignal?.aborted) {
@@ -1487,7 +1324,10 @@ export async function processMedicalFile(
 
   onProgress?.({ message: 'Đang bóc tách chỉ số xét nghiệm & đối chiếu danh mục...', progress: 96 });
 
-  const parsedPartial = parseMedicalReportFromText(extractedText, file.name);
+  // Choose the active raw text for medical parser
+  const activeRawText = (engine === 'scribe' ? scribeRawText : tesseractRawText) || scribeRawText || tesseractRawText;
+
+  const parsedPartial = parseMedicalReportFromText(activeRawText, file.name);
 
   const finalReport: LabReport = {
     id: parsedPartial.id || `rep-${Date.now()}`,
@@ -1509,7 +1349,10 @@ export async function processMedicalFile(
     unmappedCount: parsedPartial.unmappedCount || 0,
     avgConfidence: parsedPartial.avgConfidence || 90,
     rawSummary: parsedPartial.rawSummary || `Đọc được ${parsedPartial.tests?.length || 0} chỉ số`,
-    rawText: parsedPartial.rawText || extractedText || '',
+    rawText: activeRawText,
+    tesseractRawText: tesseractRawText || undefined,
+    scribeRawText: scribeRawText || undefined,
+    selectedEngine: engine,
     createdAt: new Date().toISOString(),
   };
 

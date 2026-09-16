@@ -1,0 +1,1 @@
+const a=typeof window<"u"?window.OffscreenCanvas||window.HTMLCanvasElement:class{},e=typeof window<"u"?window.ImageData:class{},n=typeof window<"u"?window.DOMMatrix:class{},o=()=>Promise.resolve({}),s={registerFromPath:()=>{}};var t={};export{a as Canvas,n as DOMMatrix,s as GlobalFonts,e as ImageData,t as default,o as loadImage};

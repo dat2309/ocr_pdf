@@ -29,9 +29,9 @@ export const Header: React.FC<HeaderProps> = ({
               <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
                 LabScan OCR
               </h1>
-              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200/60">
-                <FileSpreadsheet className="w-3 h-3 text-emerald-600" />
-                PDF.js & Tesseract OCR
+              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-medium bg-teal-50 text-teal-700 px-2.5 py-0.5 rounded-full border border-teal-200/70">
+                <FileSpreadsheet className="w-3 h-3 text-teal-600" />
+                Tesseract & Scribe.js OCR
               </span>
             </div>
             <p className="text-xs text-slate-500 hidden sm:flex items-center gap-2">

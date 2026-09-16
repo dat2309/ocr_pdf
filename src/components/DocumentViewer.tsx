@@ -18,11 +18,13 @@ import { LabReport } from '../types';
 interface DocumentViewerProps {
   report: LabReport | null;
   onDropNewFile?: (file: File) => void;
+  onApplyRawText?: (rawText: string, engineName: string) => void;
 }
 
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   report,
   onDropNewFile,
+  onApplyRawText,
 }) => {
   const [rotation, setRotation] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -31,19 +33,24 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState<'preview' | 'raw' | 'info'>('preview');
   const [copiedRaw, setCopiedRaw] = useState(false);
+  const [copiedTesseract, setCopiedTesseract] = useState(false);
+  const [copiedScribe, setCopiedScribe] = useState(false);
+  const [rawViewMode, setRawViewMode] = useState<'compare' | 'tesseract' | 'scribe' | 'active'>('compare');
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const handleCopyRaw = async () => {
-    if (!report?.rawText) return;
+  const copyToClipboard = async (text: string, setCopied: (v: boolean) => void) => {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(report.rawText);
-      setCopiedRaw(true);
-      setTimeout(() => setCopiedRaw(false), 2000);
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error('Failed to copy raw text:', err);
+      console.error('Failed to copy text:', err);
     }
   };
+
+  const handleCopyRaw = () => copyToClipboard(report?.rawText || '', setCopiedRaw);
 
   const handleRotateCw = () => setRotation((prev) => (prev + 90) % 360);
   const handleRotateCcw = () => setRotation((prev) => (prev - 90 + 360) % 360);
@@ -181,51 +188,189 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             )}
           </div>
         ) : activeTab === 'raw' ? (
-          /* Raw OCR Text View */
-          <div className="w-full h-full flex flex-col bg-slate-950 p-4 text-slate-200">
-            <div className="flex flex-wrap items-center justify-between pb-3 mb-2 border-b border-slate-800 gap-2">
+          /* Raw OCR Text View & Side-by-Side Comparison */
+          <div className="w-full h-full flex flex-col bg-slate-950 p-3 sm:p-4 text-slate-200">
+            {/* Top Toolbar: Sub-tabs and actions */}
+            <div className="flex flex-wrap items-center justify-between pb-2.5 mb-2 border-b border-slate-800 gap-2">
               <div className="flex items-center gap-2">
                 <FileCode className="w-4 h-4 text-teal-400" />
                 <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">
                   Dữ liệu Text thô (Raw OCR)
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-teal-300 font-mono">
-                  {(report.rawText || '').split('\n').filter(Boolean).length} dòng · {(report.rawText || '').length} ký tự
-                </span>
               </div>
-              <button
-                type="button"
-                onClick={handleCopyRaw}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors border border-slate-700 hover:border-slate-600 shadow-2xs"
-                title="Sao chép toàn bộ văn bản OCR vào Clipboard"
-              >
-                {copiedRaw ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-400 font-semibold">Đã chép vào Clipboard</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Sao chép Text Raw</span>
-                  </>
-                )}
-              </button>
-            </div>
 
-            <div className="flex-1 overflow-auto rounded-lg bg-slate-900 border border-slate-800/90 p-3.5 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap select-text shadow-inner">
-              {report.rawText ? (
-                report.rawText
+              {/* Engine sub-tabs if multiple engine results exist */}
+              {report.tesseractRawText && report.scribeRawText ? (
+                <div className="flex items-center bg-slate-900 border border-slate-700/80 rounded-lg p-0.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setRawViewMode('compare')}
+                    className={`px-2.5 py-1 rounded-md font-semibold transition-all ${
+                      rawViewMode === 'compare'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    So sánh 2 bên
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRawViewMode('tesseract')}
+                    className={`px-2.5 py-1 rounded-md font-semibold transition-all ${
+                      rawViewMode === 'tesseract'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Tesseract.js
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRawViewMode('scribe')}
+                    className={`px-2.5 py-1 rounded-md font-semibold transition-all ${
+                      rawViewMode === 'scribe'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Scribe.js
+                  </button>
+                </div>
               ) : (
-                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center py-8">
-                  <FileCode className="w-8 h-8 text-slate-600 mb-2" />
-                  <p className="text-xs">Chưa có chuỗi văn bản OCR thô cho tài liệu này.</p>
-                  <p className="text-[11px] text-slate-600 mt-0.5">
-                    Hãy nhấn "Đọc lại tập tin" để quét lại dữ liệu ký tự.
-                  </p>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-teal-300 font-mono">
+                    {(report.rawText || '').split('\n').filter(Boolean).length} dòng · {(report.rawText || '').length} ký tự
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyRaw}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors border border-slate-700 hover:border-slate-600 shadow-2xs"
+                    title="Sao chép toàn bộ văn bản OCR vào Clipboard"
+                  >
+                    {copiedRaw ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400 font-semibold">Đã chép</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Sao chép Raw</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               )}
             </div>
+
+            {/* Content Area */}
+            {report.tesseractRawText && report.scribeRawText && rawViewMode === 'compare' ? (
+              /* Side-by-Side Dual Pane */
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 min-h-0 overflow-hidden">
+                {/* Left: Tesseract.js */}
+                <div className="flex flex-col h-full bg-slate-900/90 rounded-lg border border-slate-800 overflow-hidden shadow-inner">
+                  <div className="flex items-center justify-between px-3 py-2 bg-slate-850 border-b border-slate-800/80">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-xs shadow-emerald-500/50"></span>
+                      <span className="text-xs font-bold text-emerald-400">Tesseract.js</span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {(report.tesseractRawText || '').split('\n').filter(Boolean).length} dòng
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {onApplyRawText && (
+                        <button
+                          type="button"
+                          onClick={() => onApplyRawText(report.tesseractRawText || '', 'Tesseract.js')}
+                          className="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 text-[11px] font-semibold border border-emerald-800/80 transition-colors"
+                          title="Áp dụng văn bản Tesseract vào bảng kết quả xét nghiệm"
+                        >
+                          Dùng text này
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(report.tesseractRawText || '', setCopiedTesseract)}
+                        className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                        title="Sao chép văn bản Tesseract.js"
+                      >
+                        {copiedTesseract ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-auto p-3 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap select-text">
+                    {report.tesseractRawText}
+                  </div>
+                </div>
+
+                {/* Right: Scribe.js */}
+                <div className="flex flex-col h-full bg-slate-900/90 rounded-lg border border-slate-800 overflow-hidden shadow-inner">
+                  <div className="flex items-center justify-between px-3 py-2 bg-slate-850 border-b border-slate-800/80">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shadow-xs shadow-purple-500/50"></span>
+                      <span className="text-xs font-bold text-purple-400">Scribe.js</span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {(report.scribeRawText || '').split('\n').filter(Boolean).length} dòng
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {onApplyRawText && (
+                        <button
+                          type="button"
+                          onClick={() => onApplyRawText(report.scribeRawText || '', 'Scribe.js')}
+                          className="px-2 py-0.5 rounded bg-purple-950/80 hover:bg-purple-900 text-purple-300 text-[11px] font-semibold border border-purple-800/80 transition-colors"
+                          title="Áp dụng văn bản Scribe.js vào bảng kết quả xét nghiệm"
+                        >
+                          Dùng text này
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(report.scribeRawText || '', setCopiedScribe)}
+                        className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                        title="Sao chép văn bản Scribe.js"
+                      >
+                        {copiedScribe ? <Check className="w-3.5 h-3.5 text-purple-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-auto p-3 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap select-text">
+                    {report.scribeRawText}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Single Full Width View */
+              <div className="flex-1 flex flex-col min-h-0 bg-slate-900 rounded-lg border border-slate-800/90 overflow-hidden">
+                <div className="flex items-center justify-between px-3.5 py-2 bg-slate-850 border-b border-slate-800 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400">Đang xem:</span>
+                    <span className="font-bold text-teal-300">
+                      {rawViewMode === 'scribe' ? 'Scribe.js' : rawViewMode === 'tesseract' ? 'Tesseract.js' : (report.selectedEngine === 'scribe' ? 'Scribe.js' : 'Tesseract.js')}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const textToCopy = rawViewMode === 'scribe' ? (report.scribeRawText || '') : (report.tesseractRawText || report.rawText || '');
+                      copyToClipboard(textToCopy, setCopiedRaw);
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] text-slate-300 hover:text-white px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700"
+                  >
+                    {copiedRaw ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    <span>Sao chép</span>
+                  </button>
+                </div>
+                <div className="flex-1 overflow-auto p-3.5 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap select-text shadow-inner">
+                  {(rawViewMode === 'scribe' ? report.scribeRawText : (rawViewMode === 'tesseract' ? report.tesseractRawText : report.rawText)) || (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center py-8">
+                      <FileCode className="w-8 h-8 text-slate-600 mb-2" />
+                      <p className="text-xs">Chưa có chuỗi văn bản OCR thô cho chế độ này.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           /* Metadata view */

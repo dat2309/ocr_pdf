@@ -10,18 +10,20 @@ import {
   FileCheck,
 } from 'lucide-react';
 import { SAMPLE_REPORTS } from '../data/sampleReports';
-import { LabReport } from '../types';
+import { LabReport, OcrEngineType } from '../types';
+import { Cpu } from 'lucide-react';
 
 interface FileUploaderModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectSample: (sample: LabReport) => void;
-  onUploadFile: (file: File) => Promise<void>;
+  onUploadFile: (file: File, engine: OcrEngineType) => Promise<void>;
   onCancelOcr?: () => void;
   isAnalyzing: boolean;
   progressMessage?: string;
   progressPercent?: number;
   error: string | null;
+  currentEngine?: OcrEngineType;
 }
 
 export const FileUploaderModal: React.FC<FileUploaderModalProps> = ({
@@ -34,7 +36,9 @@ export const FileUploaderModal: React.FC<FileUploaderModalProps> = ({
   progressMessage,
   progressPercent,
   error,
+  currentEngine = 'tesseract',
 }) => {
+  const [engine, setEngine] = useState<OcrEngineType>(currentEngine);
   const [isDragOver, setIsDragOver] = useState(false);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -45,7 +49,7 @@ export const FileUploaderModal: React.FC<FileUploaderModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setSelectedFileName(file.name);
-    await onUploadFile(file);
+    await onUploadFile(file, engine);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -54,7 +58,7 @@ export const FileUploaderModal: React.FC<FileUploaderModalProps> = ({
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
     setSelectedFileName(file.name);
-    await onUploadFile(file);
+    await onUploadFile(file, engine);
   };
 
   return (
@@ -92,6 +96,62 @@ export const FileUploaderModal: React.FC<FileUploaderModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* OCR Engine Selector */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-teal-600" />
+                Chọn thư viện nhận diện OCR:
+              </span>
+              {engine === 'both' && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold animate-pulse">
+                  So sánh 2 Raw Text
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setEngine('tesseract')}
+                disabled={isAnalyzing}
+                className={`py-2 px-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-0.5 transition-all text-center ${
+                  engine === 'tesseract'
+                    ? 'border-teal-600 bg-teal-50 text-teal-900 shadow-2xs'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                }`}
+              >
+                <span className="font-bold">Tesseract.js</span>
+                <span className="text-[10px] font-normal text-slate-500">Mặc định local</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEngine('scribe')}
+                disabled={isAnalyzing}
+                className={`py-2 px-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-0.5 transition-all text-center ${
+                  engine === 'scribe'
+                    ? 'border-purple-600 bg-purple-50 text-purple-900 shadow-2xs'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                }`}
+              >
+                <span className="font-bold">Scribe.js</span>
+                <span className="text-[10px] font-normal text-slate-500">Scribe OCR</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEngine('both')}
+                disabled={isAnalyzing}
+                className={`py-2 px-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-0.5 transition-all text-center ${
+                  engine === 'both'
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-900 shadow-2xs'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                }`}
+              >
+                <span className="font-bold">Cả hai thư viện</span>
+                <span className="text-[10px] font-normal text-slate-500">So sánh 2 Raw</span>
+              </button>
+            </div>
+          </div>
 
           {/* Drag & drop box */}
           <div

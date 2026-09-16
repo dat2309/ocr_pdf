@@ -5,7 +5,7 @@ import { LabResultsTable } from './components/LabResultsTable';
 import { FileUploaderModal } from './components/FileUploaderModal';
 import { ExcelExportModal } from './components/ExcelExportModal';
 import { SAMPLE_REPORTS } from './data/sampleReports';
-import { LabReport } from './types';
+import { LabReport, OcrEngineType } from './types';
 import { copyTableToClipboard } from './utils/excelExporter';
 import { processMedicalFile, terminateOcrWorker } from './utils/ocrEngine';
 import { parseMedicalReportFromText } from './utils/medicalParser';
@@ -19,6 +19,7 @@ export default function App() {
   const [progressMessage, setProgressMessage] = useState<string>('');
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [selectedEngine, setSelectedEngine] = useState<OcrEngineType>('both');
   const [mobileTab, setMobileTab] = useState<'document' | 'results'>('results');
   const isUploadRunningRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -31,12 +32,13 @@ export default function App() {
     terminateOcrWorker().catch(() => {});
   };
 
-  const handleUploadFile = async (file: File) => {
+  const handleUploadFile = async (file: File, engine: OcrEngineType = selectedEngine) => {
     if (isUploadRunningRef.current) return;
     isUploadRunningRef.current = true;
+    setSelectedEngine(engine);
     setIsAnalyzing(true);
     setUploadError(null);
-    setProgressMessage('Đang khởi tạo bộ máy đọc PDF.js & Tesseract OCR...');
+    setProgressMessage(`Đang khởi tạo ${engine === 'scribe' ? 'Scribe.js OCR' : engine === 'both' ? 'Tesseract & Scribe.js' : 'Tesseract.js OCR'}...`);
     setProgressPercent(5);
 
     const controller = new AbortController();
@@ -49,7 +51,8 @@ export default function App() {
           setProgressMessage(message);
           setProgressPercent(progress);
         },
-        controller.signal
+        controller.signal,
+        engine
       );
 
       setReport(parsedReport);
@@ -59,7 +62,7 @@ export default function App() {
         setUploadError('Tác vụ nhận diện đã được hủy theo yêu cầu.');
       } else {
         console.error('Lỗi khi bóc tách tài liệu:', localErr);
-        setUploadError(localErr.message || 'Không thể trích xuất dữ liệu từ file xét nghiệm bằng PDF.js & Tesseract.');
+        setUploadError(localErr.message || 'Không thể trích xuất dữ liệu từ file xét nghiệm.');
       }
     } finally {
       isUploadRunningRef.current = false;
@@ -67,6 +70,27 @@ export default function App() {
       setIsAnalyzing(false);
       setProgressPercent(0);
       setProgressMessage('');
+    }
+  };
+
+  const handleApplyRawText = (rawText: string, engineName: string) => {
+    if (!report || !rawText) return;
+    try {
+      const parsedPartial = parseMedicalReportFromText(rawText, report.fileName);
+      setReport({
+        ...report,
+        patient: parsedPartial.patient || report.patient,
+        tests: parsedPartial.tests || [],
+        totalDetected: parsedPartial.totalDetected || 0,
+        abnormalCount: parsedPartial.abnormalCount || 0,
+        unmappedCount: parsedPartial.unmappedCount || 0,
+        avgConfidence: parsedPartial.avgConfidence || 90,
+        rawSummary: parsedPartial.rawSummary || `Áp dụng dữ liệu từ ${engineName}`,
+        rawText: rawText,
+      });
+    } catch (err: any) {
+      console.error('Lỗi khi áp dụng text:', err);
+      alert('Không thể trích xuất kết quả xét nghiệm từ văn bản này.');
     }
   };
 
@@ -159,6 +183,7 @@ export default function App() {
             <DocumentViewer
               report={report}
               onDropNewFile={handleUploadFile}
+              onApplyRawText={handleApplyRawText}
             />
           </div>
 
@@ -219,6 +244,7 @@ export default function App() {
         progressMessage={progressMessage}
         progressPercent={progressPercent}
         error={uploadError}
+        currentEngine={selectedEngine}
       />
 
       <ExcelExportModal

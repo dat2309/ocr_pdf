@@ -36,6 +36,8 @@ export interface LabTestItem {
   rawLine?: string; // Dòng text gốc chứa chỉ số
 }
 
+export type OcrEngineType = 'tesseract' | 'scribe' | 'both';
+
 export interface LabReport {
   id: string;
   title: string; // vd: "Xét nghiệm máu 10 thông số"
@@ -50,6 +52,9 @@ export interface LabReport {
   avgConfidence: number;
   rawSummary?: string;
   rawText?: string;
+  tesseractRawText?: string;
+  scribeRawText?: string;
+  selectedEngine?: OcrEngineType;
   createdAt: string;
 }
 

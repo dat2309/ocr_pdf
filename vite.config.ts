@@ -20,7 +20,11 @@ export default defineConfig(() => {
     define: {
       __BUILD_TIME__: JSON.stringify(buildTime),
     },
+    worker: {
+      format: 'es',
+    },
     build: {
+      target: 'esnext',
       outDir: "docs", // Build thẳng vào thư mục docs
       emptyOutDir: false,
       rollupOptions: {
@@ -40,6 +44,7 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "."),
+        "@scribe.js/canvas": path.resolve(__dirname, "./src/utils/emptyMock.ts"),
       },
     },
     server: {
