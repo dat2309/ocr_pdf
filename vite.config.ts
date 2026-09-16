@@ -1,5 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import fs from "node:fs";
 import path from "path";
 import { defineConfig } from "vite";
 
@@ -58,7 +59,70 @@ export default defineConfig(() => {
         },
       },
     },
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      {
+        name: "patch-scribe-lstm-only",
+        enforce: "pre",
+        transform(code, id) {
+          if (!id.includes("scribe.js-ocr")) return null;
+
+          return code.replace(
+            "let oemCurrent = 2;",
+            "let oemCurrent = 1; // Patched for local tessdata_best/fast LSTM-only assets."
+          );
+        },
+        renderChunk(code, chunk) {
+          if (!chunk.fileName.endsWith("generalWorker.js")) return null;
+
+          return code
+            .replace(
+              "let oemCurrent = 2;",
+              "let oemCurrent = 1; // Patched for local tessdata_best/fast LSTM-only assets."
+            )
+            .replace(
+              /(let\s+[\w$]+\s*=\s*)2(\s*,\s*[\w$]+\s*=\s*\["eng"\]\s*,\s*[\w$]+\s*=\s*!1\s*;)/,
+              (_match, prefix, suffix) => `${prefix}1${suffix}`
+            );
+        },
+        generateBundle(_options, bundle) {
+          for (const item of Object.values(bundle)) {
+            if (item.type !== "chunk" || !item.fileName.endsWith("generalWorker.js")) continue;
+
+            item.code = item.code
+              .replace(
+                "let oemCurrent = 2;",
+                "let oemCurrent = 1; // Patched for local tessdata_best/fast LSTM-only assets."
+              )
+              .replace(
+                /(let\s+[\w$]+\s*=\s*)2(\s*,\s*[\w$]+\s*=\s*\["eng"\]\s*,\s*[\w$]+\s*=\s*!1\s*;)/,
+                (_match, prefix, suffix) => `${prefix}1${suffix}`
+              );
+          }
+        },
+        writeBundle(options) {
+          const outDir = options.dir || "docs";
+          const workerPath = path.resolve(outDir, "assets/generalWorker.js");
+          if (!fs.existsSync(workerPath)) return;
+
+          const code = fs.readFileSync(workerPath, "utf8");
+          const patched = code
+            .replace(
+              "let oemCurrent = 2;",
+              "let oemCurrent = 1; // Patched for local tessdata_best/fast LSTM-only assets."
+            )
+            .replace(
+              /(let\s+[\w$]+\s*=\s*)2(\s*,\s*[\w$]+\s*=\s*\["eng"\]\s*,\s*[\w$]+\s*=\s*!1\s*;)/,
+              (_match, prefix, suffix) => `${prefix}1${suffix}`
+            );
+
+          if (patched !== code) {
+            fs.writeFileSync(workerPath, patched);
+          }
+        },
+      },
+      react(),
+      tailwindcss(),
+    ],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "."),

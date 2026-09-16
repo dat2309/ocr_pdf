@@ -1255,6 +1255,8 @@ export async function processMedicalFile(
   abortSignal?: AbortSignal,
   engine: OcrEngineType = 'tesseract'
 ): Promise<LabReport> {
+  const effectiveEngine: OcrEngineType = engine;
+
   if (abortSignal?.aborted) {
     throw new DOMException('Tác vụ đọc file đã bị hủy.', 'AbortError');
   }
@@ -1282,7 +1284,7 @@ export async function processMedicalFile(
     }
   } else {
     previewDataUrl = await readFileAsDataUrl(file);
-    if (engine === 'tesseract' || engine === 'both') {
+    if (effectiveEngine === 'tesseract' || effectiveEngine === 'both') {
       onProgress?.({ message: 'Đang chuẩn hóa ảnh và quét Tesseract OCR...', progress: 10 });
       tesseractRawText = await extractTextFromImage(file, onProgress, abortSignal);
     }
@@ -1293,14 +1295,14 @@ export async function processMedicalFile(
   }
 
   // 2. Scribe.js pass if requested
-  if (engine === 'scribe' || engine === 'both') {
-    onProgress?.({ message: 'Đang khởi động và nhận dạng bằng Scribe.js OCR...', progress: engine === 'both' ? 60 : 15 });
+  if (effectiveEngine === 'scribe' || effectiveEngine === 'both') {
+    onProgress?.({ message: 'Đang khởi động và nhận dạng bằng Scribe.js OCR...', progress: effectiveEngine === 'both' ? 60 : 15 });
     try {
       const { extractTextWithScribe } = await import('./scribeEngine');
       scribeRawText = await extractTextWithScribe(file, {
         langs: ['vie', 'eng'],
         onProgress: (info) => {
-          if (engine === 'both') {
+          if (effectiveEngine === 'both') {
             onProgress?.({
               message: `[Scribe.js] ${info.message}`,
               progress: Math.min(95, Math.round(55 + (info.progress * 0.4))),
@@ -1312,7 +1314,7 @@ export async function processMedicalFile(
       });
     } catch (err: any) {
       console.warn('Scribe.js OCR error:', err);
-      if (engine === 'scribe') {
+      if (effectiveEngine === 'scribe') {
         onProgress?.({
           message: 'Scribe.js không khởi động được, đang chuyển sang Tesseract.js local...',
           progress: 60,
@@ -1331,7 +1333,7 @@ export async function processMedicalFile(
   onProgress?.({ message: 'Đang bóc tách chỉ số xét nghiệm & đối chiếu danh mục...', progress: 96 });
 
   // Choose the active raw text for medical parser
-  const activeRawText = (engine === 'scribe' ? scribeRawText : tesseractRawText) || scribeRawText || tesseractRawText;
+  const activeRawText = (effectiveEngine === 'scribe' ? scribeRawText : tesseractRawText) || scribeRawText || tesseractRawText;
 
   const parsedPartial = parseMedicalReportFromText(activeRawText, file.name);
 
@@ -1358,7 +1360,7 @@ export async function processMedicalFile(
     rawText: activeRawText,
     tesseractRawText: tesseractRawText || undefined,
     scribeRawText: scribeRawText || undefined,
-    selectedEngine: engine,
+    selectedEngine: effectiveEngine,
     createdAt: new Date().toISOString(),
   };
 
