@@ -5,6 +5,11 @@ import path from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig(() => {
+  const buildStamp = new Date()
+    .toISOString()
+    .replace(/\D/g, "")
+    .slice(0, 14);
+
   const buildTime = new Date().toLocaleString("vi-VN", {
     timeZone: "Asia/Ho_Chi_Minh",
     year: "numeric",
@@ -112,8 +117,17 @@ export default defineConfig(() => {
         },
         writeBundle(options) {
           const outDir = options.dir || "docs";
-          const workerPath = path.resolve(outDir, "assets/generalWorker.js");
+          const assetsDir = path.resolve(outDir, "assets");
+          const workerFileName = `generalWorker-${buildStamp}.js`;
+          const workerPath = path.resolve(assetsDir, "generalWorker.js");
+          const versionedWorkerPath = path.resolve(assetsDir, workerFileName);
           if (!fs.existsSync(workerPath)) return;
+
+          for (const fileName of fs.readdirSync(assetsDir)) {
+            if (/^generalWorker-\d+\.js$/.test(fileName) && fileName !== workerFileName) {
+              fs.unlinkSync(path.resolve(assetsDir, fileName));
+            }
+          }
 
           const code = fs.readFileSync(workerPath, "utf8");
           const patched = code
@@ -136,6 +150,22 @@ export default defineConfig(() => {
 
           if (patched !== code) {
             fs.writeFileSync(workerPath, patched);
+          }
+
+          fs.writeFileSync(versionedWorkerPath, patched);
+
+          for (const fileName of fs.readdirSync(assetsDir)) {
+            if (!fileName.endsWith(".js") || fileName === workerFileName) continue;
+
+            const filePath = path.resolve(assetsDir, fileName);
+            const content = fs.readFileSync(filePath, "utf8");
+            const rewritten = content
+              .replace(/generalWorker\.js/g, workerFileName)
+              .replace(/new URL\("generalWorker-[^"]+\.js"/g, `new URL("${workerFileName}"`);
+
+            if (rewritten !== content) {
+              fs.writeFileSync(filePath, rewritten);
+            }
           }
         },
       },
