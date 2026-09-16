@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { FILE_LIMITS, normalizeLocalIllumination } from '../src/utils/ocrEngine';
+import { FILE_LIMITS, normalizeLocalIllumination, suppressTableGridLines } from '../src/utils/ocrEngine';
 
 describe('Image Preprocessing & Aspect Ratio & Limits', () => {
   // Case 7: Ảnh ngang - không ép ảnh ngang vào canvas trang dọc
@@ -176,4 +176,44 @@ describe('Image Preprocessing & Aspect Ratio & Limits', () => {
     assert.ok(data[leftInkIdx] < 60, 'Mực in vùng sáng giữ nguyên độ đậm');
     assert.ok(data[rightInkIdx] < 90, 'Mực in vùng bóng tối không bị biến thành trắng');
   });
+
+  it('Trường hợp 24: Khử đường kẻ bảng và phát hiện tọa độ cột (suppressTableGridLines)', () => {
+    const w = 120;
+    const h = 120;
+    const data = new Uint8ClampedArray(w * h * 4);
+
+    // Điền toàn bộ nền trắng (255)
+    data.fill(255);
+
+    // Tạo một đường kẻ dọc tối màu (lum = 40) tại x = 60, chạy từ y = 10 đến y = 100 (độ dài 90px)
+    for (let y = 10; y < 100; y++) {
+      for (let dx = 0; dx <= 1; dx++) {
+        const i = (y * w + (60 + dx)) * 4;
+        data[i] = 40;
+        data[i + 1] = 40;
+        data[i + 2] = 40;
+      }
+    }
+
+    // Đặt nét chữ (ink = 30) tại điểm (20, 20)
+    const inkIdx = (20 * w + 20) * 4;
+    data[inkIdx] = 30;
+    data[inkIdx + 1] = 30;
+    data[inkIdx + 2] = 30;
+
+    // Chạy suppressTableGridLines
+    const info = suppressTableGridLines(data, w, h, 0);
+
+    // Kiểm tra đường kẻ dọc tại (60, 50) đã được làm trắng
+    const linePixelIdx = (50 * w + 60) * 4;
+    assert.equal(data[linePixelIdx], 255, 'Pixel đường kẻ bảng phải được làm trắng (255)');
+
+    // Kiểm tra nét chữ tại (20, 20) được bảo toàn nguyên vẹn
+    assert.equal(data[inkIdx], 30, 'Nét chữ không nằm trên đường kẻ phải được bảo toàn');
+
+    // Kiểm tra phát hiện vị trí cột
+    assert.ok(info.verticalDividerCols.length >= 1, 'Phải phát hiện được ít nhất 1 đường phân chia cột');
+    assert.ok(Math.abs(info.verticalDividerCols[0] - 60) <= 2, 'Vị trí cột phân chia phải khớp x ~ 60');
+  });
 });
+

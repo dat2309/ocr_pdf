@@ -351,4 +351,19 @@ Kali                                                                            
     assert.ok(ca);
     assert.equal(ca.value, '2.35');
   });
+
+  // Case 23: Xử lý chính xác dòng Creatinine bị méo OCR (amply, DE 74 i 8 - 96 gH/QTKT-03 **)
+  it('Trường hợp 23: Xử lý chính xác dòng Creatinine bị méo OCR: amply -> µmol/L, gH/QTKT, DE 74', () => {
+    const corruptedLine = 'Creatinine  65.1  amply,  DE 74 i  8 - 96 gH/QTKT-03 **';
+    const parsed = parseMedicalReportFromText(corruptedLine, 'corrupted_crea.jpg');
+    const tests = parsed.tests || [];
+
+    assert.equal(tests.length, 1, 'Phải nhận diện được 1 xét nghiệm Creatinine');
+    const crea = tests[0];
+    assert.equal(crea.code, 'CREA');
+    assert.equal(crea.value, '65.1');
+    assert.equal(crea.unit, 'µmol/L', 'amply, phải được chuyển thành µmol/L');
+    assert.ok(crea.referenceRange.includes('74') && crea.referenceRange.includes('96'), 'Khoảng tham chiếu chứa 74 và 96');
+    assert.ok(!crea.referenceRange.includes('gH/QTKT'), 'Mã quy trình gH/QTKT không được dính vào khoảng tham chiếu');
+  });
 });

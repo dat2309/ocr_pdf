@@ -627,6 +627,8 @@ export async function preprocessImageForOcr(
     const data = imgData.data;
 
     normalizeLocalIllumination(data, canvas.width, canvas.height, padding);
+    const lineInfo = suppressTableGridLines(data, canvas.width, canvas.height, padding);
+    (canvas as any).__tableDividers = lineInfo.verticalDividerCols;
     sharpenGrayscaleImageControlled(data, canvas.width, canvas.height, padding, padding, canvas.width - padding, canvas.height - padding);
     ctx.putImageData(imgData, 0, 0);
     return canvas;
@@ -634,6 +636,134 @@ export async function preprocessImageForOcr(
     console.warn('Canvas preprocessing skipped due to error, falling back to original source:', err);
     return imageSource;
   }
+}
+
+export interface GridLineInfo {
+  verticalDividerCols: number[];
+  horizontalLineRows: number[];
+}
+
+/**
+ * Suppresses vertical and horizontal table grid lines on Canvas ImageData:
+ * - Detects continuous thin dark lines (vertical dividers and horizontal borders)
+ *   that touch text characters and corrupt character recognition (e.g. '|' + 'N' -> 'DE', '|' + 'SH' -> 'gH').
+ * - Inpaints line pixels with clean white (255) using a protective safety margin.
+ * - Identifies column divider X-coordinates for table structure reconstruction.
+ */
+export function suppressTableGridLines(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  padding: number = 0
+): GridLineInfo {
+  const innerW = width - padding * 2;
+  const innerH = height - padding * 2;
+  if (innerW < 100 || innerH < 100) {
+    return { verticalDividerCols: [], horizontalLineRows: [] };
+  }
+
+  const isLine = new Uint8Array(width * height);
+  const colRuns = new Int32Array(width);
+
+  // 1. Scan for thin vertical lines
+  for (let x = padding + 2; x < width - padding - 2; x++) {
+    let runStart = -1;
+    for (let y = padding; y < height - padding; y++) {
+      const idx = (y * width + x) * 4;
+      const lum = (data[idx] * 299 + data[idx + 1] * 587 + data[idx + 2] * 114) / 1000;
+      if (lum < 185) {
+        if (runStart === -1) runStart = y;
+      } else {
+        if (runStart !== -1) {
+          const len = y - runStart;
+          if (len >= 35) {
+            colRuns[x] = Math.max(colRuns[x], len);
+            for (let ly = runStart; ly < y; ly++) {
+              isLine[ly * width + x] = 1;
+            }
+          }
+          runStart = -1;
+        }
+      }
+    }
+    if (runStart !== -1 && (height - padding - runStart) >= 35) {
+      colRuns[x] = Math.max(colRuns[x], height - padding - runStart);
+      for (let ly = runStart; ly < height - padding; ly++) {
+        isLine[ly * width + x] = 1;
+      }
+    }
+  }
+
+  // 2. Scan for thin horizontal lines
+  for (let y = padding + 2; y < height - padding - 2; y++) {
+    let runStart = -1;
+    for (let x = padding; x < width - padding; x++) {
+      const idx = (y * width + x) * 4;
+      const lum = (data[idx] * 299 + data[idx + 1] * 587 + data[idx + 2] * 114) / 1000;
+      if (lum < 185) {
+        if (runStart === -1) runStart = x;
+      } else {
+        if (runStart !== -1) {
+          const len = x - runStart;
+          if (len >= 120) {
+            for (let lx = runStart; lx < x; lx++) {
+              isLine[y * width + lx] = 1;
+            }
+          }
+          runStart = -1;
+        }
+      }
+    }
+    if (runStart !== -1 && (width - padding - runStart) >= 120) {
+      for (let lx = runStart; lx < width - padding; lx++) {
+        isLine[y * width + lx] = 1;
+      }
+    }
+  }
+
+  // 3. Find vertical divider positions (clusters of line columns with run >= 15% of height)
+  const minDividerRun = Math.max(80, Math.round(innerH * 0.15));
+  const dividerClusters: number[] = [];
+  let clusterStart = -1;
+  for (let x = padding; x < width - padding; x++) {
+    if (colRuns[x] >= minDividerRun) {
+      if (clusterStart === -1) clusterStart = x;
+    } else {
+      if (clusterStart !== -1) {
+        const center = Math.round((clusterStart + x - 1) / 2);
+        // Exclude outer canvas border
+        if (center > padding + 15 && center < width - padding - 15) {
+          dividerClusters.push(center);
+        }
+        clusterStart = -1;
+      }
+    }
+  }
+
+  // 4. Inpaint detected line pixels with 2px safety margin
+  for (let y = padding; y < height - padding; y++) {
+    for (let x = padding; x < width - padding; x++) {
+      let nearLine = false;
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx;
+        if (nx >= 0 && nx < width && isLine[y * width + nx]) {
+          nearLine = true;
+          break;
+        }
+      }
+      if (nearLine) {
+        const idx = (y * width + x) * 4;
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+      }
+    }
+  }
+
+  return {
+    verticalDividerCols: dividerClusters,
+    horizontalLineRows: [],
+  };
 }
 
 /**
@@ -829,9 +959,38 @@ export async function extractTextFromImage(
         throw createAbortError('Tác vụ OCR đã bị hủy.');
       }
 
-      let result: Awaited<ReturnType<typeof runOcrPass>>;
       activeOcrProgress = onProgress;
 
+      // 1. If table dividers were detected on the Canvas, run table-aware column OCR
+      const tableDividers =
+        (typeof HTMLCanvasElement !== 'undefined' &&
+          processedSource instanceof HTMLCanvasElement &&
+          (processedSource as any).__tableDividers) ||
+        [];
+
+      if (Array.isArray(tableDividers) && tableDividers.length >= 3) {
+        try {
+          const tableText = await runTableAwareOcr(
+            processedSource as HTMLCanvasElement,
+            tableDividers,
+            onProgress,
+            abortSignal
+          );
+          if (tableText && tableText.length > 50) {
+            return {
+              data: {
+                text: tableText,
+                tsv: '',
+              },
+            } as any;
+          }
+        } catch (err: any) {
+          if (err?.name === 'AbortError') throw err;
+          console.warn('Table-aware column OCR fallback to standard OCR:', err);
+        }
+      }
+
+      let result: Awaited<ReturnType<typeof runOcrPass>>;
       try {
         result = await runOcrPass(processedSource, onProgress, abortSignal);
       } catch (err: any) {
@@ -888,6 +1047,148 @@ async function runOcrPass(
       abortSignal.removeEventListener('abort', abortListener);
     }
   }
+}
+
+function cropCanvas(source: HTMLCanvasElement, x: number, y: number, w: number, h: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, w);
+  canvas.height = Math.max(1, h);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (ctx) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, x, y, w, h, 0, 0, w, h);
+  }
+  return canvas;
+}
+
+function extractWordsFromTsv(
+  tsv: string | null | undefined,
+  offsetX: number,
+  offsetY: number,
+  colIdx: number
+): Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }> {
+  if (!tsv) return [];
+  const words: Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }> = [];
+  const rows = tsv.split(/\r?\n/);
+  for (let i = 1; i < rows.length; i++) {
+    const cols = rows[i].split('\t');
+    if (cols.length < 12 || cols[0] !== '5') continue;
+    const text = cols.slice(11).join('\t').trim();
+    if (!text) continue;
+    const conf = Number(cols[10]);
+    words.push({
+      text,
+      confidence: Number.isFinite(conf) ? conf : 80,
+      colIdx,
+      x: offsetX + (Number(cols[6]) || 0),
+      y: offsetY + (Number(cols[7]) || 0),
+      w: Number(cols[8]) || 0,
+      h: Number(cols[9]) || 0,
+    });
+  }
+  return words;
+}
+
+async function runTableAwareOcr(
+  canvas: HTMLCanvasElement,
+  dividers: number[],
+  onProgress?: OcrProgressCallback,
+  abortSignal?: AbortSignal
+): Promise<string> {
+  const width = canvas.width;
+  const height = canvas.height;
+
+  // Build column boundaries from dividers
+  const allPoints = [...dividers];
+  if (allPoints[0] > 60) {
+    allPoints.unshift(16);
+  }
+  if (allPoints[allPoints.length - 1] < width - 60) {
+    allPoints.push(width - 16);
+  }
+
+  const columns: Array<{ left: number; width: number; index: number }> = [];
+  for (let i = 0; i < allPoints.length - 1; i++) {
+    const left = allPoints[i] + 3;
+    const right = allPoints[i + 1] - 3;
+    const colW = right - left;
+    if (colW >= 40) {
+      columns.push({ left, width: colW, index: columns.length });
+    }
+  }
+
+  if (columns.length < 3) {
+    return '';
+  }
+
+  const worker = await getLocalOcrWorker(onProgress, abortSignal);
+  if (abortSignal?.aborted) throw createAbortError('Tác vụ OCR đã bị hủy.');
+
+  const columnWords: Array<Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }>> = [];
+
+  for (let i = 0; i < columns.length; i++) {
+    if (abortSignal?.aborted) throw createAbortError('Tác vụ OCR đã bị hủy.');
+    const col = columns[i];
+    const colCanvas = cropCanvas(canvas, col.left, 0, col.width, height);
+
+    try {
+      onProgress?.({
+        message: `Đang nhận dạng cột bảng ${i + 1}/${columns.length}...`,
+        progress: Math.round(25 + (i / columns.length) * 60),
+      });
+
+      const res = await recognizeOcrVariant(worker, colCanvas);
+      const words = extractWordsFromTsv(res.data.tsv, col.left, 0, i);
+      columnWords.push(words);
+    } finally {
+      disposeCanvas(colCanvas);
+    }
+  }
+
+  // Row clustering: group words across all columns by Y proximity
+  const allWords = columnWords.flat().sort((a, b) => a.y - b.y);
+  if (allWords.length === 0) return '';
+
+  const rows: Array<{ avgY: number; words: typeof allWords }> = [];
+  for (const word of allWords) {
+    let matchedRow: (typeof rows)[0] | null = null;
+    for (const r of rows) {
+      if (Math.abs(r.avgY - word.y) <= 24) {
+        matchedRow = r;
+        break;
+      }
+    }
+    if (matchedRow) {
+      matchedRow.words.push(word);
+      matchedRow.avgY = matchedRow.words.reduce((s, w) => s + w.y, 0) / matchedRow.words.length;
+    } else {
+      rows.push({ avgY: word.y, words: [word] });
+    }
+  }
+
+  rows.sort((a, b) => a.avgY - b.avgY);
+
+  const reconstructedLines: string[] = [];
+  for (const r of rows) {
+    r.words.sort((a, b) => a.x - b.x);
+    const colTexts: string[] = new Array(columns.length).fill('');
+    for (const w of r.words) {
+      if (colTexts[w.colIdx]) colTexts[w.colIdx] += ' ' + w.text;
+      else colTexts[w.colIdx] = w.text;
+    }
+    const line = colTexts.filter((t) => t.trim()).join('    ');
+    if (line) {
+      // Merge continuation lines (sublines of multi-line cells)
+      if (/^(umol\/L|mg\/dL|[0-9.]+\s*mg\/dL|mL\/phút)/i.test(line) && reconstructedLines.length > 0) {
+        reconstructedLines[reconstructedLines.length - 1] += ' ' + line;
+      } else {
+        reconstructedLines.push(line);
+      }
+    }
+  }
+
+  return reconstructedLines.join('\n').trim();
 }
 
 async function runExclusiveOcr<T>(task: () => Promise<T>): Promise<T> {

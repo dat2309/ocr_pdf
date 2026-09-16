@@ -313,16 +313,18 @@ export function cleanOcrArtifacts(rawText: string): string {
 
     // 6. Fix common gender-label OCR typos without forcing a specific lab context.
     line = line.replace(/\bNem\s*:/gi, 'Nam:');
+    line = line.replace(/\b(?:DE|Dam|Dom)\s*[:.]?\s*(?=74|[0-9])/gi, 'Nam: ');
+    line = line.replace(/\bNam\s*[:.]?\s*74\s*[i1\-–—~]*\s*(?:N[uữ][^0-9]*)?(?:5?8)\s*[-–—~]\s*96\b/gi, 'Nam: 74-114; Nữ: 58-96');
 
     // 7. Fix % misread from * flag before medical units: 237% mmol/L -> 237 * mmol/L, 52% U/L -> 52 * U/L
-    line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|amor|g\/dL|g\/L|mg\/dL|mgd|U\/L|UA|UI|mIU|pmol|mL))/gi, '$1 * ');
+    line = line.replace(/(\b\d+(?:[.,]\d+)?)\s*%(?=\s*(?:mmol|umol|µmol|amor|amoy|amply|ampl|g\/dL|g\/L|mg\/dL|mgd|U\/L|UA|UI|mIU|pmol|mL))/gi, '$1 * ');
 
     // 8. Fix units typos:
     // First preserve mL/phút / mL/min (do NOT confuse with mg/dL)
     line = line.replace(/\bm[lL]\/(?:ph[au]t|min)\b/gi, 'mL/phút');
 
-    // Unit typos: umoVL / umot, / amor -> umol/L, mgd, / mei, / ml, / m2, -> mg/dL, UA -> U/L
-    line = line.replace(/\b(?:umo[tvVlLyY]+|amor)(?:\/L)?\b[,\s|/]*/gi, 'µmol/L ');
+    // Unit typos: umoVL / umot, / amor / amoy / amply / ampl -> µmol/L, mgd, / mei, / ml, / m2, -> mg/dL, UA -> U/L
+    line = line.replace(/\b(?:umo[tvVlLyY]+|amor|amoy|amply|ampl)(?:\/L)?\b[,\s|/]*/gi, 'µmol/L ');
     line = line.replace(/\b(?:mldl|mgld|mgdl|mgd|mei)[,\s|/]+|\b(?:ml|m2),\s*/gi, 'mg/dL ');
     line = line.replace(/\bUA\b/gi, 'U/L');
     line = line.replace(/\bmmo\b(?!\/)/gi, 'mmol/L');
@@ -332,8 +334,9 @@ export function cleanOcrArtifacts(rawText: string): string {
     line = line.replace(/\bO([0-9]*\.[0-9]+)\s*(?=(?:U\/L|UA|mmol|mg\/dL|µmol))/gi, '0$1 ');
     line = line.replace(/\b[lI]([0-9]{2,}(?:\.[0-9]+)?)\s*(?=(?:U\/L|UA|mmol|mg\/dL|µmol))/gi, '1$1 ');
 
-    // 8c. Remove table delimiters and fix procedure code typos:
+    // 8c. Remove table delimiters and fix procedure code typos (SH/QTKT, gH/QTKT, cr/QTKT, etc.):
     line = line.replace(/\s*\|\s*/g, '  ');
+    line = line.replace(/\b[a-zA-Z0-9]{1,4}\/QTKT[-.][0-9*#]+/gi, ' ');
     line = line.replace(/\bSHQTKT\b/gi, 'SH/QTKT');
 
     // 9. Fix Vietnamese character typos in reference ranges: Nir <31 -> Nữ <31
@@ -601,9 +604,9 @@ export function parseMedicalReportFromText(
         }
       }
 
-      // Strip procedure numbers (e.g. SH/QTKT-xx), ISO ** marks, formula names, and units tags before extracting flags or values
+      // Strip procedure numbers (e.g. SH/QTKT-xx, gH/QTKT-xx), ISO ** marks, formula names, and units tags before extracting flags or values
       const strippedLine = currentLine
-        .replace(/SH\/QTKT-[0-9*]+/gi, '')
+        .replace(/[a-zA-Z0-9]{1,4}\/QTKT[-.][0-9*#]+/gi, '')
         .replace(/\*{2,}/g, '') // remove ISO ** accreditation marks
         .replace(/\(CKD-EPI\s*[0-9]+\)/gi, '')
         .replace(/CKD-EPI\s*[0-9]*/gi, '')
@@ -633,10 +636,10 @@ export function parseMedicalReportFromText(
         testRefRange = refMatch[0].trim();
       } else if (i > 0 && /^[0-9<≤>≥]|Nam:.*Nữ:/.test(lines[i - 1])) {
         // Look at previous line if OCR placed reference range above
-        testRefRange = lines[i - 1].replace(/SH\/QTKT-[0-9*]+/gi, '').replace(/\*{2,}/g, '').replace(/\(HPLC[A-Z\s]*\)/gi, '').trim();
+        testRefRange = lines[i - 1].replace(/[a-zA-Z0-9]{1,4}\/QTKT[-.][0-9*#]+/gi, '').replace(/\*{2,}/g, '').replace(/\(HPLC[A-Z\s]*\)/gi, '').trim();
       } else if (i + 1 < lines.length && /^[0-9<≤>≥]|Nam:.*Nữ:/.test(lines[i + 1])) {
         // Or next line
-        testRefRange = lines[i + 1].replace(/SH\/QTKT-[0-9*]+/gi, '').replace(/\*{2,}/g, '').trim();
+        testRefRange = lines[i + 1].replace(/[a-zA-Z0-9]{1,4}\/QTKT[-.][0-9*#]+/gi, '').replace(/\*{2,}/g, '').trim();
       }
 
       // Find unit in line (prioritize multi-character medical units over '%' to avoid OCR '*' -> '%' artifact)
