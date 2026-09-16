@@ -17,9 +17,12 @@ export async function extractTextWithScribe(
 
   onProgress?.({ message: 'Khởi chạy Scribe.js OCR...', progress: 10 });
 
-  // Point to local or CDN traineddata
+  // Resolve base URL properly for GitHub Pages or nested subpaths
+  let localTessdataPath: string | null = null;
   if (typeof window !== 'undefined') {
-    scribe.opt.langPath = `${window.location.origin}/tessdata`;
+    const baseHref = new URL('.', window.location.href).href.replace(/\/+$/, '') + '/';
+    localTessdataPath = `${baseHref}tessdata`;
+    scribe.opt.langPath = localTessdataPath;
   }
 
   // Convert blob/file if needed
@@ -30,14 +33,25 @@ export async function extractTextWithScribe(
     input = new File([fileOrBlob], 'input-image.png', { type: fileOrBlob.type || 'image/png' });
   }
 
-  onProgress?.({ message: 'Scribe.js đang phân tích tài liệu...', progress: 30 });
+  onProgress?.({ message: 'Scribe.js đang phân tích tài liệu...', progress: 35 });
 
   try {
     const text = await scribe.extractText([input], langs, 'txt');
     onProgress?.({ message: 'Scribe.js hoàn tất!', progress: 100 });
     return typeof text === 'string' ? text.trim() : String(text || '').trim();
   } catch (err: any) {
-    console.error('Scribe.js OCR error:', err);
-    throw new Error(`Scribe.js OCR thất bại: ${err?.message || err}`);
+    console.warn('Scribe.js OCR failed with local tessdata path, trying fallback CDN...', err);
+
+    // Fallback: If local traineddata fetch fails (404/CORS), allow Scribe to fetch from jsdelivr CDN
+    try {
+      scribe.opt.langPath = null;
+      onProgress?.({ message: 'Đang thử lại Scribe.js với CDN...', progress: 50 });
+      const fallbackText = await scribe.extractText([input], langs, 'txt');
+      onProgress?.({ message: 'Scribe.js hoàn tất!', progress: 100 });
+      return typeof fallbackText === 'string' ? fallbackText.trim() : String(fallbackText || '').trim();
+    } catch (fallbackErr: any) {
+      console.error('Scribe.js OCR fallback error:', fallbackErr);
+      throw new Error(`Scribe.js OCR thất bại: ${err?.message || fallbackErr?.message || err}`);
+    }
   }
 }
