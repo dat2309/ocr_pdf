@@ -1062,11 +1062,33 @@ function cropCanvas(source: HTMLCanvasElement, x: number, y: number, w: number, 
   return canvas;
 }
 
+/**
+ * Upscale a canvas by an integer factor using nearest-neighbour / high-quality
+ * browser scaling. Returns a NEW canvas; caller must dispose the original.
+ */
+function upscaleCanvas(source: HTMLCanvasElement, scale: number): HTMLCanvasElement {
+  if (scale <= 1) return source;
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width * scale;
+  canvas.height = source.height * scale;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (ctx) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, 0, 0, source.width, source.height, 0, 0, canvas.width, canvas.height);
+  }
+  return canvas;
+}
+
 function extractWordsFromTsv(
   tsv: string | null | undefined,
   offsetX: number,
   offsetY: number,
-  colIdx: number
+  colIdx: number,
+  /** Divide TSV pixel coords by this factor to map back to original canvas space */
+  coordScale: number = 1
 ): Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }> {
   if (!tsv) return [];
   const words: Array<{ text: string; confidence: number; colIdx: number; x: number; y: number; w: number; h: number }> = [];
@@ -1081,10 +1103,10 @@ function extractWordsFromTsv(
       text,
       confidence: Number.isFinite(conf) ? conf : 80,
       colIdx,
-      x: offsetX + (Number(cols[6]) || 0),
-      y: offsetY + (Number(cols[7]) || 0),
-      w: Number(cols[8]) || 0,
-      h: Number(cols[9]) || 0,
+      x: offsetX + Math.round((Number(cols[6]) || 0) / coordScale),
+      y: offsetY + Math.round((Number(cols[7]) || 0) / coordScale),
+      w: Math.round((Number(cols[8]) || 0) / coordScale),
+      h: Math.round((Number(cols[9]) || 0) / coordScale),
     });
   }
   return words;
@@ -1132,17 +1154,23 @@ async function runTableAwareOcr(
     const col = columns[i];
     const colCanvas = cropCanvas(canvas, col.left, 0, col.width, height);
 
+    // Upscale 4x so that small decimal dots (e.g. "2.37") are not lost by Tesseract
+    const UPSCALE = 4;
+    const scaledCanvas = upscaleCanvas(colCanvas, UPSCALE);
+    disposeCanvas(colCanvas);
+
     try {
       onProgress?.({
         message: `Đang nhận dạng cột bảng ${i + 1}/${columns.length}...`,
         progress: Math.round(25 + (i / columns.length) * 60),
       });
 
-      const res = await recognizeOcrVariant(worker, colCanvas);
-      const words = extractWordsFromTsv(res.data.tsv, col.left, 0, i);
+      const res = await recognizeOcrVariant(worker, scaledCanvas);
+      // Pass coordScale=UPSCALE so TSV pixel coords map back to original canvas space
+      const words = extractWordsFromTsv(res.data.tsv, col.left, 0, i, UPSCALE);
       columnWords.push(words);
     } finally {
-      disposeCanvas(colCanvas);
+      disposeCanvas(scaledCanvas);
     }
   }
 
