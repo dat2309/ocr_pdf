@@ -28,6 +28,17 @@ export default defineConfig(() => {
     },
     worker: {
       format: 'es',
+      plugins: () => [{
+        name: 'patch-scribe-worker-standard-simd',
+        transform(code, id) {
+          if (!id.includes('scribe.js-ocr/tess/worker-script')) return null;
+
+          return code.replace(
+            'const relaxedSimdSupport = await relaxedSimd();',
+            'const relaxedSimdSupport = false;'
+          );
+        },
+      }],
       rollupOptions: {
         output: {
           entryFileNames: (chunkInfo) => {
@@ -77,6 +88,12 @@ export default defineConfig(() => {
           ).replace(
             "legacyCore: true,\n  legacyLang: true,",
             "legacyCore: false,\n  legacyLang: false,"
+          ).replace(
+            "const relaxedSimdSupport = await relaxedSimd();",
+            // Scribe 0.15's relaxed-SIMD LSTM core aborts on DotProductSSE in
+            // browsers that advertise relaxed SIMD. Its standard SIMD core is
+            // compatible with the same LSTM tessdata and browser worker API.
+            "const relaxedSimdSupport = false;"
           );
         },
         renderChunk(code, chunk) {
